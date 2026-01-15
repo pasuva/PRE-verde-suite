@@ -6013,7 +6013,7 @@ def admin_dashboard():
                         normalizar_apartment_id)
                     df_contratos["fuente"] = "Contrato"
 
-                    df_tirc = pd.read_sql("SELECT * FROM TIRC", conn)
+                    df_tirc = pd.read_sql('SELECT * FROM "TIRC"', conn)
                     df_tirc["apartment_id_normalizado"] = df_tirc["apartment_id"].apply(normalizar_apartment_id)
                     df_tirc["fuente"] = "TIRC"
 
@@ -7858,8 +7858,14 @@ def mostrar_kpis_seguimiento_contratos():
             cursor = conn.cursor()
 
             # Verificar que la tabla existe
-            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='seguimiento_contratos'")
-            if not cursor.fetchone():
+            cursor.execute("""
+                SELECT EXISTS (
+                    SELECT FROM information_schema.tables 
+                    WHERE table_schema = 'public' 
+                    AND table_name = 'seguimiento_contratos'
+                );
+            """)
+            if not cursor.fetchone()[0]:
                 st.warning("⚠️ La tabla 'seguimiento_contratos' no existe en la base de datos")
                 conn.close()
                 return
@@ -9081,8 +9087,14 @@ def mostrar_certificacion():
             cursor = conn.cursor()
 
             # Método 1: Usar PRAGMA para SQLite
-            cursor.execute("PRAGMA table_info(comercial_rafa)")
-            columnas_comercial_rafa = [row[1] for row in cursor.fetchall()]
+            cursor.execute("""
+                SELECT column_name 
+                FROM information_schema.columns 
+                WHERE table_schema = 'public' 
+                  AND table_name = 'comercial_rafa'
+                ORDER BY ordinal_position;
+            """)
+            columnas_comercial_rafa = [row[0] for row in cursor.fetchall()]
 
             # Método alternativo: Usar consulta SELECT con LIMIT 0
             # cursor.execute("SELECT * FROM comercial_rafa LIMIT 0")
