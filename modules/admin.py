@@ -9077,6 +9077,7 @@ def proteger_identificador(nombre):
         return f'"{nombre}"'
     return nombre
 
+
 def mostrar_certificacion():
     """Muestra el panel de certificación con análisis de ofertas y observaciones"""
     st.info("📋 **Certificación de Ofertas** - Análisis completo de visitas comerciales y estado de CTOs")
@@ -9089,10 +9090,8 @@ def mostrar_certificacion():
                 st.toast("❌ No se pudo conectar a la base de datos")
                 return
 
-            # Primero, obtener las columnas disponibles de comercial_rafa
+            # Obtener las columnas disponibles de comercial_rafa
             cursor = conn.cursor()
-
-            # Método 1: Usar PRAGMA para SQLite
             cursor.execute("""
                 SELECT column_name 
                 FROM information_schema.columns 
@@ -9102,55 +9101,67 @@ def mostrar_certificacion():
             """)
             columnas_comercial_rafa = [row[0] for row in cursor.fetchall()]
 
-            # Método alternativo: Usar consulta SELECT con LIMIT 0
-            # cursor.execute("SELECT * FROM comercial_rafa LIMIT 0")
-            # columnas_comercial_rafa = [desc[0] for desc in cursor.description]
-
             st.toast(f"📊 Columnas en comercial_rafa: {len(columnas_comercial_rafa)} encontradas")
 
-            # Verificar columnas específicas
-            columnas_a_incluir = []
-            columnas_base = [
+            # --- PASO 1: Crear mapeo completo de columnas (minúsculas -> nombre protegido) ---
+            mapeo_columnas = {}
+            for col_real in columnas_comercial_rafa:
+                # Proteger columnas con mayúsculas
+                if any(c.isupper() for c in col_real):
+                    mapeo_columnas[col_real.lower()] = f'"{col_real}"'
+                else:
+                    mapeo_columnas[col_real.lower()] = col_real
+
+            # --- PASO 2: Construir SELECT con columnas protegidas ---
+            columnas_base_minusculas = [
                 'apartment_id', 'comercial', 'serviciable', 'incidencia',
-                'Tipo_Vivienda', 'observaciones', 'contrato', 'fichero_imagen'
+                'tipo_vivienda', 'observaciones', 'contrato', 'fichero_imagen'
             ]
 
-            # Buscar variaciones de fecha
-            posibles_nombres_fecha = ['fecha_visita', 'fecha', 'fecha_visita_comercial',
-                                      'visita_fecha', 'fecha_visita_1', 'fecha_visita_2']
+            columnas_seleccionadas = []
+            columnas_no_encontradas = []
 
-            nombre_fecha = None
-            for nombre in posibles_nombres_fecha:
-                if nombre in columnas_comercial_rafa:
-                    nombre_fecha = nombre
-                    st.toast(f"✅ Columna de fecha encontrada: {nombre_fecha}")
+            for col_minuscula in columnas_base_minusculas:
+                if col_minuscula in mapeo_columnas:
+                    nombre_protegido = mapeo_columnas[col_minuscula]
+                    columnas_seleccionadas.append(f"cr.{nombre_protegido}")
+                else:
+                    columnas_no_encontradas.append(col_minuscula)
+                    st.toast(f"⚠️ Columna '{col_minuscula}' no encontrada")
+
+            # Buscar columna de fecha
+            posibles_fechas_minusculas = ['fecha_visita', 'fecha', 'fecha_visita_comercial',
+                                          'visita_fecha', 'fecha_visita_1', 'fecha_visita_2']
+
+            fecha_protegida = None
+            for fecha_minuscula in posibles_fechas_minusculas:
+                if fecha_minuscula in mapeo_columnas:
+                    fecha_protegida = mapeo_columnas[fecha_minuscula]
+                    st.toast(f"✅ Columna de fecha encontrada: {fecha_protegida}")
                     break
 
-            # Construir consulta dinámicamente
-            columnas_seleccionadas = []
-
-            # Columnas de comercial_rafa - CON MAYCÚSCULAS PROTEGIDAS
-            for col in columnas_base:
-                if col in columnas_comercial_rafa:
-                    # Proteger el nombre si tiene mayúsculas
-                    col_protegida = proteger_identificador(col)
-                    columnas_seleccionadas.append(f"cr.{col_protegida}")
-                else:
-                    st.toast(f"⚠️ Columna '{col}' no encontrada en comercial_rafa")
-
-            # Añadir columna de fecha si existe - TAMBIÉN PROTEGIDA
-            if nombre_fecha:
-                fecha_protegida = proteger_identificador(nombre_fecha)
+            if fecha_protegida:
                 columnas_seleccionadas.append(f"cr.{fecha_protegida}")
 
-            # Si no hay suficientes columnas, usar todas (protegidas)
+            # Si no hay suficientes columnas, usar todas
             if len(columnas_seleccionadas) < 5:
                 st.warning("⚠️ Pocas columnas encontradas, usando SELECT *")
-                columnas_seleccionadas = ["cr.*"]
+                columnas_str = "cr.*"
+            else:
+                columnas_str = ", ".join(columnas_seleccionadas)
 
-            # Consulta dinámica
-            columnas_str = ", ".join(columnas_seleccionadas)
+            # --- PASO 3: Obtener nombres protegidos para WHERE ---
+            # Importante: usar minúsculas para buscar en el mapeo
+            contrato_protegido = mapeo_columnas.get('contrato', 'contrato')
+            serviciable_protegido = mapeo_columnas.get('serviciable', 'serviciable')
 
+            # Verificar que las columnas del WHERE existen
+            if 'contrato' not in mapeo_columnas:
+                st.warning(f"⚠️ Columna 'contrato' no encontrada. Usando '{contrato_protegido}'")
+            if 'serviciable' not in mapeo_columnas:
+                st.warning(f"⚠️ Columna 'serviciable' no encontrada. Usando '{serviciable_protegido}'")
+
+            # --- PASO 4: Construir consulta FINAL con TODO protegido ---
             query_ofertas = f"""
             SELECT 
                 {columnas_str},
@@ -9163,11 +9174,14 @@ def mostrar_certificacion():
                 du.numero AS numero_du
             FROM comercial_rafa cr
             LEFT JOIN datos_uis du ON cr.apartment_id = du.apartment_id
-            WHERE (cr.contrato IS NULL OR LOWER(TRIM(COALESCE(cr.contrato, ''))) != 'pendiente')
-            AND cr.serviciable IS NOT NULL
+            WHERE (cr.{contrato_protegido} IS NULL OR LOWER(TRIM(COALESCE(cr.{contrato_protegido}, ''))) != 'pendiente')
+            AND cr.{serviciable_protegido} IS NOT NULL
             """
 
-            # Mostrar consulta para depuración
+            # Mostrar consulta para depuración (opcional)
+            # st.code(query_ofertas)
+
+            # --- PASO 5: Ejecutar consulta ---
             df_ofertas = pd.read_sql(query_ofertas, conn)
 
             if df_ofertas.empty:
@@ -9175,13 +9189,16 @@ def mostrar_certificacion():
                 conn.close()
                 return
 
-            # Paso 2: Calcular estadísticas por CTO
-            query_ctos = """
+            # --- PASO 6: Segunda consulta (también necesita protección) ---
+            # Obtener nombre protegido de observaciones
+            observaciones_protegido = mapeo_columnas.get('observaciones', 'observaciones')
+
+            query_ctos = f"""
             WITH visitas_realizadas AS (
                 SELECT DISTINCT apartment_id 
                 FROM comercial_rafa 
-                WHERE observaciones IS NOT NULL 
-                AND TRIM(COALESCE(observaciones, '')) != ''
+                WHERE {observaciones_protegido} IS NOT NULL 
+                AND TRIM(COALESCE({observaciones_protegido}, '')) != ''
             )
             SELECT
                 du.cto,
@@ -9200,11 +9217,12 @@ def mostrar_certificacion():
                 st.warning("⚠️ No se encontraron datos de CTOs.")
                 return
 
-            # Calcular porcentaje
+            # --- PASO 7: Procesar resultados ---
             df_ctos['porcentaje_visitado'] = (
-                        df_ctos['viviendas_visitadas'] / df_ctos['total_viviendas_cto'] * 100).round(2)
+                    df_ctos['viviendas_visitadas'] / df_ctos['total_viviendas_cto'] * 100
+            ).round(2)
 
-            # Paso 3: Unir datos
+            # Unir datos
             if 'cto' in df_ofertas.columns:
                 df_final = pd.merge(
                     df_ofertas,
@@ -9214,7 +9232,6 @@ def mostrar_certificacion():
                     suffixes=('', '_cto_stats')
                 )
             else:
-                # Si no hay columna cto, no podemos hacer merge
                 st.toast("❌ No se encontró la columna 'cto' para unir estadísticas")
                 df_final = df_ofertas.copy()
                 df_final['total_viviendas_cto'] = None
@@ -9237,12 +9254,16 @@ def mostrar_certificacion():
             if rename_map:
                 df_final = df_final.rename(columns=rename_map)
 
-            # Mostrar información sobre el DataFrame
-            # Clasificar observaciones
-            df_final = clasificar_observaciones(df_final)
-
             # Mostrar resultados
-            mostrar_resultados_certificacion(df_final)
+            if 'clasificar_observaciones' in globals():
+                df_final = clasificar_observaciones(df_final)
+
+            if 'mostrar_resultados_certificacion' in globals():
+                mostrar_resultados_certificacion(df_final)
+            else:
+                # Mostrar vista básica si no existe la función
+                st.subheader("📊 Resultados de Certificación")
+                st.dataframe(df_final.head(20))
 
         except Exception as e:
             st.toast(f"❌ Error en el proceso de certificación: {str(e)}")
