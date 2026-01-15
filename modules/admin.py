@@ -10318,10 +10318,10 @@ def create_tipo_vivienda_distribution_graph(cursor) -> go.Figure:
     """Crea gráfico de distribución de tipos de vivienda"""
     cursor.execute("""
         SELECT 
-            COALESCE(NULLIF(Tipo_Vivienda, ''), 'No especificado') as Tipo_Vivienda,
+            COALESCE(NULLIF("Tipo_Vivienda", ''), 'No especificado') as "Tipo_Vivienda",
             COUNT(*) as count
         FROM comercial_rafa 
-        GROUP BY Tipo_Vivienda
+        GROUP BY "Tipo_Vivienda"
         ORDER BY count DESC
         LIMIT 8
     """)
