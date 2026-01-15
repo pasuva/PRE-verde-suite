@@ -10459,7 +10459,7 @@ def home_page():
 
 
 # Si necesitas mantener compatibilidad con la versión anterior
-def obtener_conexion():
+def obtener_conexion2():
     """Wrapper para mantener compatibilidad"""
     return get_db_connection()  # Asumiendo que existe esta función
 
