@@ -1774,11 +1774,13 @@ def viabilidades_seccion():
                     SELECT id, ticket, apartment_id, latitud, longitud, provincia, municipio, 
                            poblacion, nombre_cliente, telefono, serviciable, resultado, 
                            estado_obra, fecha_entrega, coste, justificacion, zona_estudio,
-                           contratos, respuesta_comercial, nuevapromocion, comentarios,
+                           contratos, respuesta_comercial, nuevapromocion, comentario,
                            created_at, updated_at
                     FROM viabilidades
                 """
                 viabilidades_df = pd.read_sql(query, conn)
+                if 'comentario' in viabilidades_df.columns:
+                    viabilidades_df = viabilidades_df.rename(columns={'comentario': 'comentarios'})
 
                 cursor.close()
                 conn.close()
@@ -10478,10 +10480,10 @@ def home_page():
                     municipio,
                     serviciable,
                     incidencia,
-                    Tipo_Vivienda,
+                    "Tipo_Vivienda",
                     COUNT(*) as total
                 FROM comercial_rafa
-                GROUP BY provincia, municipio, serviciable, incidencia, Tipo_Vivienda
+                GROUP BY provincia, municipio, serviciable, incidencia, "Tipo_Vivienda"
                 ORDER BY total DESC
                 LIMIT 20
             """)
