@@ -7877,7 +7877,7 @@ def mostrar_kpis_seguimiento_contratos():
                 fecha_inicio_contrato, fecha_ingreso, comercial,
                 fecha_instalacion, apartment_id, fecha_estado,
                 fecha_fin_contrato, comentarios, divisor, puerto,
-                SAT, Tipo_cliente, tecnico, metodo_entrada, billing
+                "SAT", "Tipo_cliente", tecnico, metodo_entrada, billing
             FROM seguimiento_contratos
             """
 
@@ -9071,6 +9071,12 @@ def mostrar_kpis_seguimiento_contratos():
                 st.code(traceback.format_exc())
 ########################
 
+def proteger_identificador(nombre):
+    """Envuelve en comillas dobles los identificadores con mayúsculas para PostgreSQL"""
+    if any(c.isupper() for c in nombre):
+        return f'"{nombre}"'
+    return nombre
+
 def mostrar_certificacion():
     """Muestra el panel de certificación con análisis de ofertas y observaciones"""
     st.info("📋 **Certificación de Ofertas** - Análisis completo de visitas comerciales y estado de CTOs")
@@ -9123,18 +9129,21 @@ def mostrar_certificacion():
             # Construir consulta dinámicamente
             columnas_seleccionadas = []
 
-            # Columnas de comercial_rafa
+            # Columnas de comercial_rafa - CON MAYCÚSCULAS PROTEGIDAS
             for col in columnas_base:
                 if col in columnas_comercial_rafa:
-                    columnas_seleccionadas.append(f"cr.{col}")
+                    # Proteger el nombre si tiene mayúsculas
+                    col_protegida = proteger_identificador(col)
+                    columnas_seleccionadas.append(f"cr.{col_protegida}")
                 else:
                     st.toast(f"⚠️ Columna '{col}' no encontrada en comercial_rafa")
 
-            # Añadir columna de fecha si existe
+            # Añadir columna de fecha si existe - TAMBIÉN PROTEGIDA
             if nombre_fecha:
-                columnas_seleccionadas.append(f"cr.{nombre_fecha}")
+                fecha_protegida = proteger_identificador(nombre_fecha)
+                columnas_seleccionadas.append(f"cr.{fecha_protegida}")
 
-            # Si no hay suficientes columnas, usar todas
+            # Si no hay suficientes columnas, usar todas (protegidas)
             if len(columnas_seleccionadas) < 5:
                 st.warning("⚠️ Pocas columnas encontradas, usando SELECT *")
                 columnas_seleccionadas = ["cr.*"]
