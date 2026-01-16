@@ -9645,29 +9645,40 @@ def mostrar_resultados_certificacion(df):
                 width='stretch'
             )
 
+
 def generar_informe(fecha_inicio, fecha_fin):
     # Conectar a la base de datos y realizar cada consulta
     def ejecutar_consulta(query, params=None):
         # Abrir la conexión para cada consulta
         conn = obtener_conexion()
+        if conn is None:
+            return 0
         cursor = conn.cursor()
-        cursor.execute(query, params if params else ())
-        result = cursor.fetchone()
-        conn.close()  # Cerrar la conexión inmediatamente después de ejecutar la consulta
-        return result[0] if result else 0
+        try:
+            cursor.execute(query, params if params else ())
+            result = cursor.fetchone()
+            # Verificar si result es None o vacío
+            if result is None or len(result) == 0:
+                return 0
+            return result[0] if result[0] is not None else 0
+        except Exception as e:
+            print(f"Error en consulta: {e}")
+            return 0
+        finally:
+            conn.close()
 
     # 🔹 1️⃣ Total de asignaciones en el periodo T
     query_total = """
         SELECT COUNT(DISTINCT apartment_id) 
-        FROM datos_uis
-        WHERE STRFTIME('%Y-%m-%d', fecha) BETWEEN %s AND %s
+        FROM "datos_UIs"
+        WHERE DATE(fecha) BETWEEN %s AND %s
     """
     total_asignaciones = ejecutar_consulta(query_total, (fecha_inicio, fecha_fin))
 
     # 🔹 2️⃣ Cantidad de visitas (apartment_id presente en ambas tablas, sin filtrar por fecha)
     query_visitados = """
         SELECT COUNT(DISTINCT d.apartment_id)
-        FROM datos_uis d
+        FROM "datos_UIs" d
         INNER JOIN comercial_rafa o 
             ON d.apartment_id = o.apartment_id
     """
@@ -9676,17 +9687,17 @@ def generar_informe(fecha_inicio, fecha_fin):
     # 🔹 3️⃣ Cantidad de ventas (visitados donde contrato = 'Sí')
     query_ventas = """
         SELECT COUNT(DISTINCT d.apartment_id)
-        FROM datos_uis d
+        FROM "datos_UIs" d
         INNER JOIN comercial_rafa o 
             ON d.apartment_id = o.apartment_id
-        WHERE LOWER(o.contrato) = 'sí'
+        WHERE LOWER(o."Contrato") = 'sí'
     """
     total_ventas = ejecutar_consulta(query_ventas)
 
     # 🔹 4️⃣ Cantidad de incidencias (donde incidencia = 'Sí')
     query_incidencias = """
         SELECT COUNT(DISTINCT d.apartment_id)
-        FROM datos_uis d
+        FROM "datos_UIs" d
         INNER JOIN comercial_rafa o 
             ON d.apartment_id = o.apartment_id
         WHERE LOWER(o.incidencia) = 'sí'
@@ -9714,11 +9725,12 @@ def generar_informe(fecha_inicio, fecha_fin):
         'Ventas': [total_ventas],
         'Incidencias': [total_incidencias],
         'Viviendas No Serviciables': [total_no_serviciables],
-        '% Ventas': [porcentaje_ventas],
-        '% Visitas': [porcentaje_visitas],
-        '% Incidencias': [porcentaje_incidencias],
-        '% Viviendas No Serviciables': [porcentaje_no_serviciables]
+        '% Ventas': [round(porcentaje_ventas, 2)],
+        '% Visitas': [round(porcentaje_visitas, 2)],
+        '% Incidencias': [round(porcentaje_incidencias, 2)],
+        '% Viviendas No Serviciables': [round(porcentaje_no_serviciables, 2)]
     })
+
     st.write("----------------------")
     # Crear tres columnas para los gráficos
     col1, col2, col3 = st.columns(3)
@@ -9748,7 +9760,7 @@ def generar_informe(fecha_inicio, fecha_fin):
         fig_serviciables = go.Figure(data=[go.Bar(
             x=labels_serviciables,
             y=values_serviciables,
-            text=values_serviciables,
+            text=[f"{v:.1f}%" for v in values_serviciables],
             textposition='outside',
             marker=dict(color=['#ff6666', '#99cc99'])
         )])
@@ -9778,37 +9790,37 @@ def generar_informe(fecha_inicio, fecha_fin):
     # 🔹 VIABILIDADES: Cálculo y resumen textual
     conn = obtener_conexion()
     query_viabilidades = """
-           SELECT 
-               CASE 
-                   WHEN LOWER(serviciable) = 'sí' THEN 'sí'
-                   WHEN LOWER(serviciable) = 'no' THEN 'no'
-                   ELSE 'desconocido'
-               END AS serviciable,
-               COUNT(*) as total
-           FROM viabilidades
-           WHERE STRFTIME('%Y-%m-%d', fecha_viabilidad) BETWEEN %s AND %s
-           GROUP BY serviciable
-       """
+        SELECT 
+            CASE 
+                WHEN LOWER(serviciable) = 'sí' THEN 'sí'
+                WHEN LOWER(serviciable) = 'no' THEN 'no'
+                ELSE 'desconocido'
+            END AS serviciable,
+            COUNT(*) as total
+        FROM viabilidades
+        WHERE DATE(fecha_viabilidad) BETWEEN %s AND %s
+        GROUP BY serviciable
+    """
     df_viabilidades = pd.read_sql_query(query_viabilidades, conn, params=(fecha_inicio, fecha_fin))
     conn.close()
 
     total_viabilidades = df_viabilidades['total'].sum()
     total_serviciables = df_viabilidades[df_viabilidades['serviciable'] == 'sí']['total'].sum() if 'sí' in \
-                                                                                                          df_viabilidades[
-                                                                                                              'serviciable'].values else 0
+                                                                                                   df_viabilidades[
+                                                                                                       'serviciable'].values else 0
     total_no_serviciables_v = df_viabilidades[df_viabilidades['serviciable'] == 'no']['total'].sum() if 'no' in \
-                                                                                                               df_viabilidades[
-                                                                                                                   'serviciable'].values else 0
+                                                                                                        df_viabilidades[
+                                                                                                            'serviciable'].values else 0
 
     porcentaje_viables = (total_serviciables / total_viabilidades * 100) if total_viabilidades > 0 else 0
     porcentaje_no_viables = (total_no_serviciables_v / total_viabilidades * 100) if total_viabilidades > 0 else 0
 
     resumen_viabilidades = f"""
-       <div style="text-align: justify;">
-       Además, durante el mismo periodo se registraron <strong>{total_viabilidades}</strong> viabilidades realizadas. De estas, <strong>{total_serviciables}</strong> fueron consideradas <strong>serviciables</strong> (<strong>{porcentaje_viables:.2f}%</strong>) y <strong>{total_no_serviciables_v}</strong> fueron <strong>no serviciables</strong> (<strong>{porcentaje_no_viables:.2f}%</strong>). Las restantes, son viabilidades aun en estudio.
-       </div>
-       <br>
-       """
+    <div style="text-align: justify;">
+    Además, durante el mismo periodo se registraron <strong>{total_viabilidades}</strong> viabilidades realizadas. De estas, <strong>{total_serviciables}</strong> fueron consideradas <strong>serviciables</strong> (<strong>{porcentaje_viables:.2f}%</strong>) y <strong>{total_no_serviciables_v}</strong> fueron <strong>no serviciables</strong> (<strong>{porcentaje_no_viables:.2f}%</strong>). Las restantes, son viabilidades aun en estudio.
+    </div>
+    <br>
+    """
 
     st.markdown(resumen_viabilidades, unsafe_allow_html=True)
 
@@ -9820,13 +9832,13 @@ def generar_informe(fecha_inicio, fecha_fin):
         SELECT COUNT(*) 
         FROM trazabilidad
         WHERE LOWER(accion) LIKE '%asignación%' 
-          AND STRFTIME('%Y-%m-%d', fecha) BETWEEN %s AND %s
+          AND DATE(fecha) BETWEEN %s AND %s
     """
     query_desasignaciones = """
         SELECT COUNT(*) 
         FROM trazabilidad
         WHERE LOWER(accion) LIKE '%desasignación%' 
-          AND STRFTIME('%Y-%m-%d', fecha) BETWEEN %s AND %s
+          AND DATE(fecha) BETWEEN %s AND %s
     """
     total_asignaciones_trazabilidad = ejecutar_consulta(query_asignaciones_trazabilidad, (fecha_inicio, fecha_fin))
     total_desasignaciones = ejecutar_consulta(query_desasignaciones, (fecha_inicio, fecha_fin))
@@ -9840,8 +9852,8 @@ def generar_informe(fecha_inicio, fecha_fin):
         'Asignaciones Gestor': [total_asignaciones_trazabilidad],
         'Desasignaciones Gestor': [total_desasignaciones],
         'Total Movimientos': [total_movimientos],
-        '% Asignaciones': [porcentaje_asignaciones],
-        '% Desasignaciones': [porcentaje_desasignaciones]
+        '% Asignaciones': [round(porcentaje_asignaciones, 2)],
+        '% Desasignaciones': [round(porcentaje_desasignaciones, 2)]
     })
 
     col_t1, col_t2 = st.columns(2)
@@ -9922,7 +9934,7 @@ def generar_informe(fecha_inicio, fecha_fin):
             END AS Serviciable,
             COUNT(*) AS Total
         FROM viabilidades
-        WHERE STRFTIME('%Y-%m-%d', fecha_viabilidad) BETWEEN %s AND %s
+        WHERE DATE(fecha_viabilidad) BETWEEN %s AND %s
         GROUP BY Serviciable
     """
     df_serviciable = pd.read_sql_query(query_serviciable, conn, params=(fecha_inicio, fecha_fin))
@@ -9934,7 +9946,7 @@ def generar_informe(fecha_inicio, fecha_fin):
             COALESCE(estado, 'Sin estado') AS Estado,
             COUNT(*) AS Total
         FROM viabilidades
-        WHERE STRFTIME('%Y-%m-%d', fecha_viabilidad) BETWEEN %s AND %s
+        WHERE DATE(fecha_viabilidad) BETWEEN %s AND %s
         GROUP BY Estado
         ORDER BY Total DESC
     """
@@ -9946,7 +9958,7 @@ def generar_informe(fecha_inicio, fecha_fin):
             COALESCE(resultado, 'Sin resultado') AS Resultado,
             COUNT(*) AS Total
         FROM viabilidades
-        WHERE STRFTIME('%Y-%m-%d', fecha_viabilidad) BETWEEN %s AND %s
+        WHERE DATE(fecha_viabilidad) BETWEEN %s AND %s
         GROUP BY Resultado
         ORDER BY Total DESC
     """
@@ -9956,7 +9968,7 @@ def generar_informe(fecha_inicio, fecha_fin):
     query_comentarios = """
         SELECT COUNT(*) FROM viabilidades 
         WHERE comentarios_gestor IS NOT NULL AND TRIM(comentarios_gestor) <> ''
-          AND STRFTIME('%Y-%m-%d', fecha_viabilidad) BETWEEN %s AND %s
+          AND DATE(fecha_viabilidad) BETWEEN %s AND %s
     """
     total_comentarios = ejecutar_consulta(query_comentarios, (fecha_inicio, fecha_fin))
     porcentaje_comentarios = (total_comentarios / total_viabilidades * 100) if total_viabilidades > 0 else 0
@@ -9968,52 +9980,55 @@ def generar_informe(fecha_inicio, fecha_fin):
     # ──────────────────────────────
     colv1, colv2 = st.columns(2)
     with colv1:
-        fig_s = go.Figure(data=[go.Pie(
-            labels=df_serviciable["Serviciable"],
-            values=df_serviciable["Total"],
-            hole=0.4,
-            textinfo="percent+label",
-            marker=dict(colors=["#81c784", "#e57373", "#bdbdbd"])
-        )])
-        fig_s.update_layout(
-            title="Distribución de Viabilidades (Serviciables / No / Desconocidas)",
-            title_x=0.1,
-            showlegend=False
-        )
-        st.plotly_chart(fig_s, config={'width': 'stretch', 'theme': 'streamlit'})
+        if not df_serviciable.empty:
+            fig_s = go.Figure(data=[go.Pie(
+                labels=df_serviciable["Serviciable"],
+                values=df_serviciable["Total"],
+                hole=0.4,
+                textinfo="percent+label",
+                marker=dict(colors=["#81c784", "#e57373", "#bdbdbd"])
+            )])
+            fig_s.update_layout(
+                title="Distribución de Viabilidades (Serviciables / No / Desconocidas)",
+                title_x=0.1,
+                showlegend=False
+            )
+            st.plotly_chart(fig_s, config={'width': 'stretch', 'theme': 'streamlit'})
 
     with colv2:
-        fig_e = go.Figure(data=[go.Bar(
-            x=df_estado["Estado"],
-            y=df_estado["Total"],
-            text=df_estado["Total"],
-            textposition="outside"
-        )])
-        fig_e.update_layout(
-            title="Distribución por Estado de Viabilidad",
-            title_x=0.1,
-            xaxis_title="Estado",
-            yaxis_title="Número de Viabilidades",
-            height=400
-        )
-        st.plotly_chart(fig_e, config={'width': 'stretch', 'theme': 'streamlit'})
+        if not df_estado.empty:
+            fig_e = go.Figure(data=[go.Bar(
+                x=df_estado["Estado"],
+                y=df_estado["Total"],
+                text=df_estado["Total"],
+                textposition="outside"
+            )])
+            fig_e.update_layout(
+                title="Distribución por Estado de Viabilidad",
+                title_x=0.1,
+                xaxis_title="Estado",
+                yaxis_title="Número de Viabilidades",
+                height=400
+            )
+            st.plotly_chart(fig_e, config={'width': 'stretch', 'theme': 'streamlit'})
 
     colv3, colv4 = st.columns(2)
     with colv3:
-        fig_r = go.Figure(data=[go.Bar(
-            x=df_resultado["Resultado"],
-            y=df_resultado["Total"],
-            text=df_resultado["Total"],
-            textposition="outside"
-        )])
-        fig_r.update_layout(
-            title="Distribución por Resultado de Viabilidad",
-            title_x=0.1,
-            xaxis_title="Resultado",
-            yaxis_title="Número de Casos",
-            height=400
-        )
-        st.plotly_chart(fig_r, config={'width': 'stretch', 'theme': 'streamlit'})
+        if not df_resultado.empty:
+            fig_r = go.Figure(data=[go.Bar(
+                x=df_resultado["Resultado"],
+                y=df_resultado["Total"],
+                text=df_resultado["Total"],
+                textposition="outside"
+            )])
+            fig_r.update_layout(
+                title="Distribución por Resultado de Viabilidad",
+                title_x=0.1,
+                xaxis_title="Resultado",
+                yaxis_title="Número de Casos",
+                height=400
+            )
+            st.plotly_chart(fig_r, config={'width': 'stretch', 'theme': 'streamlit'})
 
     with colv4:
         st.metric(label="💬 Viabilidades con Comentarios del Gestor",
@@ -10055,40 +10070,40 @@ def generar_informe(fecha_inicio, fecha_fin):
 
     # 1️⃣ Total de precontratos en el periodo
     query_total_precontratos = """
-           SELECT COUNT(*) 
-           FROM precontratos 
-           WHERE STRFTIME('%Y-%m-%d', fecha) BETWEEN %s AND %s
-       """
+        SELECT COUNT(*) 
+        FROM precontratos 
+        WHERE DATE(fecha) BETWEEN %s AND %s
+    """
     total_precontratos = ejecutar_consulta(query_total_precontratos, (fecha_inicio, fecha_fin))
 
     # 2️⃣ Precontratos por comercial
     query_precontratos_comercial = """
-           SELECT comercial, COUNT(*) as total
-           FROM precontratos
-           WHERE STRFTIME('%Y-%m-%d', fecha) BETWEEN %s AND %s
-           GROUP BY comercial
-           ORDER BY total DESC
-       """
+        SELECT comercial, COUNT(*) as total
+        FROM precontratos
+        WHERE DATE(fecha) BETWEEN %s AND %s
+        GROUP BY comercial
+        ORDER BY total DESC
+    """
     df_precontratos_comercial = pd.read_sql_query(query_precontratos_comercial, conn, params=(fecha_inicio, fecha_fin))
 
     # 3️⃣ Precontratos por tarifa
     query_precontratos_tarifa = """
-           SELECT tarifas, COUNT(*) as total
-           FROM precontratos
-           WHERE STRFTIME('%Y-%m-%d', fecha) BETWEEN %s AND %s
-           GROUP BY tarifas
-           ORDER BY total DESC
-       """
+        SELECT tarifas, COUNT(*) as total
+        FROM precontratos
+        WHERE DATE(fecha) BETWEEN %s AND %s
+        GROUP BY tarifas
+        ORDER BY total DESC
+    """
     df_precontratos_tarifa = pd.read_sql_query(query_precontratos_tarifa, conn, params=(fecha_inicio, fecha_fin))
 
     # 4️⃣ Precontratos completados (con firma)
     query_precontratos_completados = """
-           SELECT COUNT(*) 
-           FROM precontratos 
-           WHERE firma IS NOT NULL 
-             AND TRIM(firma) <> ''
-             AND STRFTIME('%Y-%m-%d', fecha) BETWEEN %s AND %s
-       """
+        SELECT COUNT(*) 
+        FROM precontratos 
+        WHERE firma IS NOT NULL 
+          AND TRIM(firma) <> ''
+          AND DATE(fecha) BETWEEN %s AND %s
+    """
     total_precontratos_completados = ejecutar_consulta(query_precontratos_completados, (fecha_inicio, fecha_fin))
     porcentaje_completados = (
                 total_precontratos_completados / total_precontratos * 100) if total_precontratos > 0 else 0
@@ -10145,15 +10160,15 @@ def generar_informe(fecha_inicio, fecha_fin):
 
     # Resumen Precontratos
     resumen_precontratos = f"""
-       <div style="text-align: justify;">
-       En el periodo analizado, se han generado <strong>{total_precontratos}</strong> precontratos. 
-       De estos, <strong>{total_precontratos_completados}</strong> han sido completados por los clientes, 
-       lo que representa una tasa de completado del <strong>{porcentaje_completados:.1f}%</strong>.
-       {" El comercial con mayor número de precontratos es " + df_precontratos_comercial.iloc[0]['comercial'] + " con " + str(df_precontratos_comercial.iloc[0]['total']) + " precontratos." if not df_precontratos_comercial.empty else ""}
-       {" La tarifa más utilizada es " + df_precontratos_tarifa.iloc[0]['tarifas'] + " con " + str(df_precontratos_tarifa.iloc[0]['total']) + " precontratos." if not df_precontratos_tarifa.empty else ""}
-       </div>
-       <br>
-       """
+    <div style="text-align: justify;">
+    En el periodo analizado, se han generado <strong>{total_precontratos}</strong> precontratos. 
+    De estos, <strong>{total_precontratos_completados}</strong> han sido completados por los clientes, 
+    lo que representa una tasa de completado del <strong>{porcentaje_completados:.1f}%</strong>.
+    {" El comercial con mayor número de precontratos es " + df_precontratos_comercial.iloc[0]['comercial'] + " con " + str(df_precontratos_comercial.iloc[0]['total']) + " precontratos." if not df_precontratos_comercial.empty else ""}
+    {" La tarifa más utilizada es " + df_precontratos_tarifa.iloc[0]['tarifas'] + " con " + str(df_precontratos_tarifa.iloc[0]['total']) + " precontratos." if not df_precontratos_tarifa.empty else ""}
+    </div>
+    <br>
+    """
     st.markdown(resumen_precontratos, unsafe_allow_html=True)
 
     # ─────────────────────────────────────────────
@@ -10166,50 +10181,50 @@ def generar_informe(fecha_inicio, fecha_fin):
 
     # 1️⃣ Total de contratos en el periodo
     query_total_contratos = """
-           SELECT COUNT(*) 
-           FROM seguimiento_contratos 
-           WHERE STRFTIME('%Y-%m-%d', fecha_ingreso) BETWEEN %s AND %s
-       """
+        SELECT COUNT(*) 
+        FROM seguimiento_contratos 
+        WHERE DATE(fecha_ingreso) BETWEEN %s AND %s
+    """
     total_contratos = ejecutar_consulta(query_total_contratos, (fecha_inicio, fecha_fin))
 
     # 2️⃣ Contratos por estado
     query_contratos_estado = """
-           SELECT estado, COUNT(*) as total
-           FROM seguimiento_contratos
-           WHERE STRFTIME('%Y-%m-%d', fecha_ingreso) BETWEEN %s AND %s
-           GROUP BY estado
-           ORDER BY total DESC
-       """
+        SELECT estado, COUNT(*) as total
+        FROM seguimiento_contratos
+        WHERE DATE(fecha_ingreso) BETWEEN %s AND %s
+        GROUP BY estado
+        ORDER BY total DESC
+    """
     df_contratos_estado = pd.read_sql_query(query_contratos_estado, conn, params=(fecha_inicio, fecha_fin))
 
     # 3️⃣ Contratos por comercial
     query_contratos_comercial = """
-           SELECT comercial, COUNT(*) as total
-           FROM seguimiento_contratos
-           WHERE STRFTIME('%Y-%m-%d', fecha_ingreso) BETWEEN %s AND %s
-           GROUP BY comercial
-           ORDER BY total DESC
-       """
+        SELECT comercial, COUNT(*) as total
+        FROM seguimiento_contratos
+        WHERE DATE(fecha_ingreso) BETWEEN %s AND %s
+        GROUP BY comercial
+        ORDER BY total DESC
+    """
     df_contratos_comercial = pd.read_sql_query(query_contratos_comercial, conn, params=(fecha_inicio, fecha_fin))
 
     # 4️⃣ Contratos activos vs finalizados
     query_contratos_activos = """
-           SELECT COUNT(*) 
-           FROM seguimiento_contratos 
-           WHERE estado IN ('Activo', 'En proceso', 'Pendiente')
-             AND STRFTIME('%Y-%m-%d', fecha_ingreso) BETWEEN %s AND %s
-       """
+        SELECT COUNT(*) 
+        FROM seguimiento_contratos 
+        WHERE estado IN ('Activo', 'En proceso', 'Pendiente')
+          AND DATE(fecha_ingreso) BETWEEN %s AND %s
+    """
     total_contratos_activos = ejecutar_consulta(query_contratos_activos, (fecha_inicio, fecha_fin))
     porcentaje_activos = (total_contratos_activos / total_contratos * 100) if total_contratos > 0 else 0
 
     # 5️⃣ Contratos con fecha de instalación
     query_contratos_instalados = """
-           SELECT COUNT(*) 
-           FROM seguimiento_contratos 
-           WHERE fecha_instalacion IS NOT NULL 
-             AND TRIM(fecha_instalacion) <> ''
-             AND STRFTIME('%Y-%m-%d', fecha_ingreso) BETWEEN %s AND %s
-       """
+        SELECT COUNT(*) 
+        FROM seguimiento_contratos 
+        WHERE fecha_instalacion IS NOT NULL 
+          AND TRIM(fecha_instalacion) <> ''
+          AND DATE(fecha_ingreso) BETWEEN %s AND %s
+    """
     total_contratos_instalados = ejecutar_consulta(query_contratos_instalados, (fecha_inicio, fecha_fin))
     porcentaje_instalados = (total_contratos_instalados / total_contratos * 100) if total_contratos > 0 else 0
 
@@ -10262,16 +10277,16 @@ def generar_informe(fecha_inicio, fecha_fin):
 
     # Resumen Contratos
     resumen_contratos = f"""
-       <div style="text-align: justify;">
-       En el periodo analizado, se han registrado <strong>{total_contratos}</strong> contratos en el sistema. 
-       De estos, <strong>{total_contratos_activos}</strong> se encuentran activos o en proceso 
-       (<strong>{porcentaje_activos:.1f}%</strong> del total), y <strong>{total_contratos_instalados}</strong> 
-       ya cuentan con fecha de instalación confirmada.
-       {" El estado más común es " + df_contratos_estado.iloc[0]['estado'] + " con " + str(df_contratos_estado.iloc[0]['total']) + " contratos." if not df_contratos_estado.empty else ""}
-       {" El comercial con mayor número de contratos es " + df_contratos_comercial.iloc[0]['comercial'] + " con " + str(df_contratos_comercial.iloc[0]['total']) + " contratos." if not df_contratos_comercial.empty else ""}
-       </div>
-       <br>
-       """
+    <div style="text-align: justify;">
+    En el periodo analizado, se han registrado <strong>{total_contratos}</strong> contratos en el sistema. 
+    De estos, <strong>{total_contratos_activos}</strong> se encuentran activos o en proceso 
+    (<strong>{porcentaje_activos:.1f}%</strong> del total), y <strong>{total_contratos_instalados}</strong> 
+    ya cuentan con fecha de instalación confirmada.
+    {" El estado más común es " + df_contratos_estado.iloc[0]['estado'] + " con " + str(df_contratos_estado.iloc[0]['total']) + " contratos." if not df_contratos_estado.empty else ""}
+    {" El comercial con mayor número de contratos es " + df_contratos_comercial.iloc[0]['comercial'] + " con " + str(df_contratos_comercial.iloc[0]['total']) + " contratos." if not df_contratos_comercial.empty else ""}
+    </div>
+    <br>
+    """
     st.markdown(resumen_contratos, unsafe_allow_html=True)
 
     return informe
