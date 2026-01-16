@@ -530,7 +530,7 @@ def cargar_datos_uis():
 
     # Consulta de comercial_rafa
     query_rafa = """
-        SELECT apartment_id, serviciable, Contrato, provincia, municipio, poblacion,
+        SELECT apartment_id, serviciable, "Contrato", provincia, municipio, poblacion,
                motivo_serviciable, incidencia, motivo_incidencia, nombre_cliente,
                telefono, direccion_alternativa, observaciones, comercial, comentarios
         FROM comercial_rafa
@@ -5880,7 +5880,7 @@ def admin_dashboard():
                         insert_sql = '''INSERT INTO seguimiento_contratos (
                             num_contrato, cliente, coordenadas, estado, fecha_inicio_contrato, fecha_ingreso,
                             comercial, fecha_instalacion, apartment_id, fecha_fin_contrato, divisor, puerto, comentarios,
-                            SAT, Tipo_cliente, tecnico, metodo_entrada, billing
+                            "SAT", Tipo_cliente, tecnico, metodo_entrada, billing
                         ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)'''
 
                         inserted_divisor = 0
@@ -6011,8 +6011,8 @@ def admin_dashboard():
                             WHERE fecha_fin_contrato IS NOT NULL 
                                OR divisor IS NOT NULL 
                                OR puerto IS NOT NULL
-                               OR SAT IS NOT NULL
-                               OR Tipo_cliente IS NOT NULL
+                               OR "SAT" IS NOT NULL
+                               OR "Tipo_cliente" IS NOT NULL
                                OR tecnico IS NOT NULL
                             LIMIT 5
                         """)
@@ -7339,7 +7339,7 @@ def mostrar_kpis_seguimiento_contratos():
                 fecha_inicio_contrato, fecha_ingreso, comercial,
                 fecha_instalacion, apartment_id, fecha_estado,
                 fecha_fin_contrato, comentarios, divisor, puerto,
-                SAT, Tipo_cliente, tecnico, metodo_entrada, billing
+                "SAT", "Tipo_cliente", tecnico, metodo_entrada, billing
             FROM seguimiento_contratos
             """
 
@@ -9742,10 +9742,10 @@ def create_tipo_vivienda_distribution_graph(cursor) -> go.Figure:
     """Crea gráfico de distribución de tipos de vivienda"""
     cursor.execute("""
         SELECT 
-            COALESCE(NULLIF(Tipo_Vivienda, ''), 'No especificado') as Tipo_Vivienda,
+            COALESCE(NULLIF("Tipo_Viviend"a, ''), 'No especificado') as "Tipo_Vivienda",
             COUNT(*) as count
         FROM comercial_rafa 
-        GROUP BY Tipo_Vivienda
+        GROUP BY "Tipo_Vivienda"
         ORDER BY count DESC
         LIMIT 8
     """)
@@ -9904,10 +9904,10 @@ def home_page():
                     municipio,
                     serviciable,
                     incidencia,
-                    Tipo_Vivienda,
+                    "Tipo_Vivienda",
                     COUNT(*) as total
                 FROM comercial_rafa
-                GROUP BY provincia, municipio, serviciable, incidencia, Tipo_Vivienda
+                GROUP BY provincia, municipio, serviciable, incidencia, "Tipo_Vivienda"
                 ORDER BY total DESC
                 LIMIT 20
             """)
