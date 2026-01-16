@@ -8549,8 +8549,13 @@ def mostrar_certificacion():
             cursor = conn.cursor()
 
             # Método 1: Usar PRAGMA para SQLite
-            cursor.execute("PRAGMA table_info(comercial_rafa)")
-            columnas_comercial_rafa = [row[1] for row in cursor.fetchall()]
+            cursor.execute("""
+                SELECT column_name 
+                FROM information_schema.columns 
+                WHERE table_name = 'comercial_rafa' 
+                ORDER BY ordinal_position
+            """)
+            columnas_comercial_rafa = [row[0] for row in cursor.fetchall()]
 
             # Método alternativo: Usar consulta SELECT con LIMIT 0
             # cursor.execute("SELECT * FROM comercial_rafa LIMIT 0")
