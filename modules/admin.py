@@ -3686,10 +3686,10 @@ def mostrar_metricas_tickets():
 
         # Tickets últimos 7 días - CAMBIO: PostgreSQL usa CURRENT_DATE e INTERVAL
         ultimos_7d = pd.read_sql("""
-                SELECT DATE(fecha_creacion) as fecha, COUNT(*) as cantidad
+                SELECT fecha_creacion::DATE as fecha, COUNT(*) as cantidad
                 FROM tickets 
                 WHERE fecha_creacion >= CURRENT_DATE - INTERVAL '7 days'
-                GROUP BY DATE(fecha_creacion)
+                GROUP BY fecha_creacion::DATE
                 ORDER BY fecha
             """, conn)
 
@@ -7769,13 +7769,13 @@ def admin_dashboard():
 
         # Crear tabla si no existe (sin columna autor)
         cursor.execute("""
-                CREATE TABLE IF NOT EXISTS anuncios (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    titulo TEXT NOT NULL,
-                    descripcion TEXT NOT NULL,
-                    fecha TEXT NOT NULL
-                )
-            """)
+            CREATE TABLE IF NOT EXISTS anuncios (
+                id SERIAL PRIMARY KEY,
+                titulo TEXT NOT NULL,
+                descripcion TEXT NOT NULL,
+                fecha TEXT NOT NULL
+            )
+        """)
         conn.commit()
 
         # Obtener rol del usuario actual
@@ -10500,13 +10500,6 @@ def home_page():
     finally:
         cursor.close()
         conn.close()
-
-
-# Si necesitas mantener compatibilidad con la versión anterior
-def obtener_conexion2():
-    """Wrapper para mantener compatibilidad"""
-    return get_db_connection()  # Asumiendo que existe esta función
-
 
 if __name__ == "__main__":
     admin_dashboard()
