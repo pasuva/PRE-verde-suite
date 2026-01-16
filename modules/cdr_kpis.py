@@ -91,29 +91,27 @@ def cargar_y_procesar_cdr():
                 ]
             )
         else:
-            raise ValueError("❌ No se encontraron credenciales de Google Service Account.")
+            st.error("❌ No se encontraron credenciales de Google Service Account.")
+            return pd.DataFrame(), {}
 
         # Crear cliente
         client = gspread.authorize(creds)
 
         # --- Abrir la hoja de Google Sheets del CDR ---
-        # NOTA: Debes ajustar el nombre de la hoja y la pestaña según tu caso
         sheet = client.open("CDR VERDE PBX").worksheet("CDR VERDE PBX")
         data = sheet.get_all_records()
 
         if not data:
-            print("⚠️ Hoja cargada pero sin registros. Revisa si la primera fila tiene encabezados correctos.")
+            st.warning("⚠️ Hoja cargada pero sin registros. Revisa si la primera fila tiene encabezados correctos.")
             return pd.DataFrame(), {}
 
         df = pd.DataFrame(data)
 
         # --- Procesamiento específico del CDR ---
-        # 1. Normalizar nombres de columnas (como en tu función de contratos)
+        # 1. Normalizar nombres de columnas
         df.columns = df.columns.map(lambda x: str(x).strip().upper() if x is not None else "")
 
-        # 2. Mapeo de columnas a nombres más manejables (opcional, pero recomendable)
-        # Aquí debes definir el mapeo según las columnas de tu CDR.
-        # Ejemplo basado en la muestra que mostraste:
+        # 2. Mapeo de columnas a nombres más manejables
         column_mapping = {
             'CALLDATE': 'calldate',
             'CLID': 'clid',
@@ -162,8 +160,10 @@ def cargar_y_procesar_cdr():
         return df, kpis
 
     except Exception as e:
-        print(f"❌ Error en cargar_y_procesar_cdr: {e}")
-        return None, None
+        st.error(f"❌ Error en cargar_y_procesar_cdr: {e}")
+        import traceback
+        st.code(traceback.format_exc())
+        return pd.DataFrame(), {}
 
 
 # ==================== FUNCIONES DE CÁLCULO DE KPIS ====================
@@ -364,64 +364,72 @@ def mostrar_cdrs():
         else:
             return obj
 
-    # Inicializar estados en session_state - CORREGIDO: Añadir df_cdr_original
-    if 'pdf_generado' not in st.session_state:
-        st.session_state.pdf_generado = False
-    if 'pdf_bytes' not in st.session_state:
-        st.session_state.pdf_bytes = None
-    if 'pdf_filename' not in st.session_state:
-        st.session_state.pdf_filename = None
-    if 'datos_cargados' not in st.session_state:
-        st.session_state.datos_cargados = False
-    if 'df_cdr_original' not in st.session_state:  # AÑADIDO: Inicializar df_cdr_original
-        st.session_state.df_cdr_original = None
+        # Inicializar estados en session_state
+        if 'pdf_generado' not in st.session_state:
+            st.session_state.pdf_generado = False
+        if 'pdf_bytes' not in st.session_state:
+            st.session_state.pdf_bytes = None
+        if 'pdf_filename' not in st.session_state:
+            st.session_state.pdf_filename = None
+        if 'datos_cargados' not in st.session_state:
+            st.session_state.datos_cargados = False
+        if 'df_cdr_original' not in st.session_state:
+            st.session_state.df_cdr_original = pd.DataFrame()  # Inicializar con DataFrame vacío
 
-    # Botón para cargar y procesar
-    if st.button("Cargar y analizar CDR"):
-        with st.spinner("Cargando datos desde Google Sheets..."):
-            df_cdr, _ = cargar_y_procesar_cdr()  # Obtén el DataFrame
+        # Botón para cargar y procesar
+        if st.button("Cargar y analizar CDR"):
+            with st.spinner("Cargando datos desde Google Sheets..."):
+                df_cdr, _ = cargar_y_procesar_cdr()
 
-            # FILTRAR SOLO LAS LLAMADAS QUE TIENEN DURACIÓN O ESTADO (no son solo intentos)
-            # Guardar el DataFrame original para referencia
-            st.session_state.df_cdr_original = df_cdr.copy()
+                # VERIFICAR SI df_cdr ES VÁLIDO
+                if df_cdr is None:
+                    st.error("❌ La función cargar_y_procesar_cdr() retornó None")
+                    return
 
-            # Crear un DataFrame filtrado con solo las llamadas que tienen información de duración/estado
-            # Primero, crear una máscara para identificar registros que son llamadas reales
-            mask = (
-                    (df_cdr['duration'].notna() & (df_cdr['duration'].astype(str).str.strip() != '')) |
-                    (df_cdr['billsec'].notna() & (df_cdr['billsec'].astype(str).str.strip() != '')) |
-                    (df_cdr['disposition'].notna() & (df_cdr['disposition'].astype(str).str.strip() != ''))
-            )
+                if df_cdr.empty:
+                    st.warning("⚠️ No se encontraron datos en el CDR")
+                    return
 
-            # Aplicar la máscara
-            df_filtrado = df_cdr[mask].copy()
+                # Guardar el DataFrame original para referencia
+                st.session_state.df_cdr_original = df_cdr.copy()
 
-            # Convertir columnas numéricas
-            for col in ['duration', 'billsec']:
-                if col in df_filtrado.columns:
-                    # Reemplazar valores vacíos o inválidos por 0
-                    df_filtrado[col] = pd.to_numeric(df_filtrado[col].replace('', 0).fillna(0), errors='coerce')
+                # Crear un DataFrame filtrado con solo las llamadas que tienen información de duración/estado
+                # Primero, crear una máscara para identificar registros que son llamadas reales
+                mask = (
+                        (df_cdr['duration'].notna() & (df_cdr['duration'].astype(str).str.strip() != '')) |
+                        (df_cdr['billsec'].notna() & (df_cdr['billsec'].astype(str).str.strip() != '')) |
+                        (df_cdr['disposition'].notna() & (df_cdr['disposition'].astype(str).str.strip() != ''))
+                )
 
-            # Calcular los KPIs ampliados CON EL DATAFRAME FILTRADO
-            kpis = calcular_kpis_cdr_ampliada(df_filtrado)
+                # Aplicar la máscara
+                df_filtrado = df_cdr[mask].copy() if 'duration' in df_cdr.columns else df_cdr.copy()
 
-            # Agregar información adicional sobre el filtrado
-            kpis['total_registros'] = len(df_cdr)
-            kpis['llamadas_filtradas'] = len(df_filtrado)
-            kpis['intentos_no_completados'] = len(df_cdr) - len(df_filtrado)
+                # Convertir columnas numéricas si existen
+                for col in ['duration', 'billsec']:
+                    if col in df_filtrado.columns:
+                        # Reemplazar valores vacíos o inválidos por 0
+                        df_filtrado[col] = pd.to_numeric(df_filtrado[col].replace('', 0).fillna(0), errors='coerce')
 
-            # Guardar en session_state
-            st.session_state.df_cdr = df_filtrado
-            st.session_state.kpis = kpis
-            st.session_state.datos_cargados = True
-            st.session_state.pdf_generado = False  # Resetear estado PDF
+                # Calcular los KPIs ampliados CON EL DATAFRAME FILTRADO
+                kpis = calcular_kpis_cdr_ampliada(df_filtrado)
 
-        if df_cdr is not None and not df_cdr.empty:
-            st.success(
-                f"✅ Datos cargados correctamente. Total registros: {len(df_cdr)} | Llamadas con información: {len(df_filtrado)} | Intentos no completados: {len(df_cdr) - len(df_filtrado)}")
-            st.rerun()  # Forzar actualización para mostrar el PDF
-        else:
-            st.error("No se pudieron cargar los datos o no hay registros.")
+                # Agregar información adicional sobre el filtrado
+                kpis['total_registros'] = len(df_cdr)
+                kpis['llamadas_filtradas'] = len(df_filtrado)
+                kpis['intentos_no_completados'] = len(df_cdr) - len(df_filtrado)
+
+                # Guardar en session_state
+                st.session_state.df_cdr = df_filtrado
+                st.session_state.kpis = kpis
+                st.session_state.datos_cargados = True
+                st.session_state.pdf_generado = False  # Resetear estado PDF
+
+            if not df_cdr.empty:
+                st.success(
+                    f"✅ Datos cargados correctamente. Total registros: {len(df_cdr)} | Llamadas con información: {len(df_filtrado)} | Intentos no completados: {len(df_cdr) - len(df_filtrado)}")
+                st.rerun()
+            else:
+                st.error("No se pudieron cargar los datos o no hay registros.")
 
     # Mostrar contenido solo si los datos están cargados
     if st.session_state.get('datos_cargados', False) and 'df_cdr' in st.session_state:
