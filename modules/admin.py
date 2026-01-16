@@ -2105,9 +2105,20 @@ def viabilidades_seccion():
 
 # Función para obtener conexión a la base de datos (SQLite Cloud)
 def get_db_connection():
-    return sqlitecloud.connect(
-        "sqlitecloud://ceafu04onz.g6.sqlite.cloud:8860/usuarios.db%sapikey=Qo9m18B9ONpfEGYngUKm99QB5bgzUTGtK7iAcThmwvY"
-    )
+    try:
+        # Configuración para CapRover
+        conn = psycopg2.connect(
+            host="srv-captain--verde-db",  # Nombre del servicio PostgreSQL en CapRover
+            port=5432,
+            database="usuarios",  # Nombre de la base de datos
+            user="postgres",
+            password="5c9691d50cde7659",
+            connect_timeout=10
+        )
+        return conn
+    except psycopg2.Error as e:
+        print(f"Error al conectar con PostgreSQL: {e}")
+        return None
 
 def generar_ticket():
     """Genera un ticket único con formato: añomesdia(numero_consecutivo)"""
