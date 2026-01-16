@@ -9742,25 +9742,26 @@ def create_tipo_vivienda_distribution_graph(cursor) -> go.Figure:
     """Crea gráfico de distribución de tipos de vivienda"""
     cursor.execute("""
         SELECT 
-            COALESCE(NULLIF("Tipo_Vivienda", ''), 'No especificado') as "Tipo_Vivienda",
+            COALESCE(NULLIF("Tipo_Vivienda", ''), 'No especificado') as tipo_vivienda,
             COUNT(*) as count
         FROM comercial_rafa 
+        WHERE "Tipo_Vivienda" IS NOT NULL
         GROUP BY "Tipo_Vivienda"
         ORDER BY count DESC
         LIMIT 8
     """)
 
     data = cursor.fetchall()
-    df = pd.DataFrame(data, columns=["Tipo_Vivienda", "count"])
+    df = pd.DataFrame(data, columns=["tipo_vivienda", "count"])
 
     # Crear gráfico de barras horizontales para mejor lectura
     fig = px.bar(
         df,
         x="count",
-        y="Tipo_Vivienda",
+        y="tipo_vivienda",
         title="Top 8 - Distribución de Tipos de Vivienda",
-        labels={"Tipo_Vivienda": "Tipo de Vivienda", "count": "Cantidad"},
-        color="Tipo_Vivienda",
+        labels={"tipo_vivienda": "Tipo de Vivienda", "count": "Cantidad"},
+        color="tipo_vivienda",
         orientation='h',
         color_discrete_sequence=px.colors.sequential.Blues
     )
