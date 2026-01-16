@@ -1,3 +1,5 @@
+from sqlalchemy.dialects.postgresql import psycopg2
+
 from modules.notificaciones import correo_usuario, correo_nuevas_zonas_comercial, correo_excel_control, \
     correo_envio_presupuesto_manual, correo_nueva_version, correo_asignacion_puntos_existentes, \
     correo_viabilidad_comercial, notificar_asignacion_ticket, notificar_actualizacion_ticket, correo_respuesta_comercial,\
@@ -24,12 +26,6 @@ from typing import Tuple, Dict, List
 from modules.reportes_pdf import preparar_datos_para_pdf, generar_pdf_reportlab
 from modules.cdr_kpis import mostrar_cdrs
 
-#paquetes para posgres#
-import psycopg2
-from psycopg2 import pool
-import os
-#######################
-
 warnings.filterwarnings("ignore", category=UserWarning)
 
 cookie_name = "my_app"
@@ -52,26 +48,21 @@ def obtener_conexion():
         print(f"Error al conectar con PostgreSQL: {e}")
         return None
 
-
 def log_trazabilidad(usuario, accion, detalles):
-    """Inserta un registro en la tabla de trazabilidad usando context managers."""
+    """Inserta un registro en la tabla de trazabilidad."""
     try:
-        with obtener_conexion() as conn:
-            with conn.cursor() as cursor:
-                cursor.execute("""
-                    INSERT INTO trazabilidad (usuario_id, accion, detalles, fecha)
-                    VALUES (%s, %s, %s, NOW())
-                    RETURNING id
-                """, (usuario, accion, detalles))
-
-                # Si quieres obtener el ID del registro insertado
-                registro_id = cursor.fetchone()[0] if cursor.rowcount > 0 else None
-                conn.commit()
-                return registro_id
-
+        conn = obtener_conexion()
+        cursor = conn.cursor()
+        fecha = dt.now().strftime("%Y-%m-%d %H:%M:%S")
+        cursor.execute("""
+            INSERT INTO trazabilidad (usuario_id, accion, detalles, fecha)
+            VALUES (%s, %s, %s, %s)
+        """, (usuario, accion, detalles, fecha))
+        conn.commit()
+        conn.close()
     except Exception as e:
+        # En caso de error en la trazabilidad, se imprime en consola (no se interrumpe la app)
         print(f"Error registrando trazabilidad: {e}")
-        return None
 
 # Función para convertir a numérico y manejar excepciones
 def safe_convert_to_numeric(col):
@@ -82,65 +73,10 @@ def safe_convert_to_numeric(col):
 
 def actualizar_google_sheet_desde_db(sheet_id, sheet_name="Viabilidades"):
     try:
-        # --- 1️⃣ Leer datos de la base de datos POSTGRESQL ---
+        # --- 1️⃣ Leer datos de la base de datos ---
         conn = obtener_conexion()
-        if conn is None:
-            st.error("❌ No se pudo conectar a la base de datos PostgreSQL")
-            return
-
-        cursor = conn.cursor()
-
-        # IMPORTANTE: Verificar que la tabla existe en PostgreSQL
-        try:
-            # Primero, obtener información de la tabla
-            cursor.execute("""
-                SELECT column_name, data_type 
-                FROM information_schema.columns 
-                WHERE table_name = 'viabilidades'
-                ORDER BY ordinal_position
-            """)
-            columnas_db = cursor.fetchall()
-
-            if not columnas_db:
-                st.error("❌ La tabla 'viabilidades' no existe en PostgreSQL")
-                conn.close()
-                return
-
-            st.info(f"✅ Columnas en PostgreSQL: {[col[0] for col in columnas_db]}")
-
-            # Leer datos usando pd.read_sql con conexión PostgreSQL
-            # Asegurarse de que todas las columnas necesarias existan
-            cursor.execute("""
-                SELECT 
-                    apartment_id, 
-                    ticket,
-                    usuario,
-                    fecha_entrega,
-                    estado_obra,
-                    nuevapromocion,
-                    resultado,
-                    justificacion,
-                    coste,
-                    zona_estudio,
-                    contratos,
-                    respuesta_comercial
-                FROM viabilidades
-                WHERE apartment_id IS NOT NULL
-            """)
-
-            # Obtener resultados y crear DataFrame
-            column_names = [desc[0] for desc in cursor.description]
-            data = cursor.fetchall()
-            df_db = pd.DataFrame(data, columns=column_names)
-
-        except Exception as db_error:
-            st.error(f"❌ Error al leer de PostgreSQL: {db_error}")
-            conn.close()
-            return
-
-        finally:
-            cursor.close()
-            conn.close()
+        df_db = pd.read_sql("SELECT * FROM viabilidades", conn)
+        conn.close()
 
         if df_db.empty:
             st.warning("⚠️ No hay datos en la tabla 'viabilidades'.")
@@ -149,8 +85,7 @@ def actualizar_google_sheet_desde_db(sheet_id, sheet_name="Viabilidades"):
         # --- 2️⃣ Expandir filas con múltiples apartment_id ---
         expanded_rows = []
         for _, row in df_db.iterrows():
-            # PostgreSQL puede devolver None en lugar de NaN
-            apartment_ids = str(row["apartment_id"]).split(",") if row["apartment_id"] is not None else [""]
+            apartment_ids = str(row["apartment_id"]).split(",") if pd.notna(row["apartment_id"]) else [""]
             for apt in apartment_ids:
                 new_row = row.copy()
                 new_row["apartment_id"] = apt.strip()
@@ -235,8 +170,7 @@ def actualizar_google_sheet_desde_db(sheet_id, sheet_name="Viabilidades"):
         for _, row_db in df_db_expanded.iterrows():
             apt_db = str(row_db.get("apartment_id", "")).strip().upper()
             ticket_db = str(row_db.get("ticket", "")).strip()
-
-            if not ticket_db or ticket_db == "None":
+            if not ticket_db:
                 continue  # ignorar filas sin ticket
 
             # Buscar coincidencia exacta de ticket + apartment_id
@@ -254,16 +188,10 @@ def actualizar_google_sheet_desde_db(sheet_id, sheet_name="Viabilidades"):
                 for col in headers:
                     db_col = excel_to_db_map.get(col, col)  # Usa el mapeo si existe, sino el mismo nombre
                     if db_col in df_db_expanded.columns:
-                        # Manejar valores None de PostgreSQL
-                        valor_db = row_db[db_col]
-                        nuevo_valor = "" if valor_db is None or pd.isna(valor_db) else str(valor_db)
-
-                        # Obtener valor actual en el sheet
-                        actual_valor = df_sheet.at[idx, col]
-                        actual_valor_str = "" if pd.isna(actual_valor) else str(actual_valor)
-
+                        nuevo_valor = "" if pd.isna(row_db[db_col]) else str(row_db[db_col])
+                        actual_valor = "" if pd.isna(df_sheet.at[idx, col]) else str(df_sheet.at[idx, col])
                         # Compara sin espacios y sin distinción de mayúsculas
-                        if nuevo_valor.strip() != actual_valor_str.strip():
+                        if nuevo_valor.strip() != actual_valor.strip():
                             df_sheet.at[idx, col] = nuevo_valor
                             cambios_realizados = True
 
@@ -276,8 +204,7 @@ def actualizar_google_sheet_desde_db(sheet_id, sheet_name="Viabilidades"):
                 for col in headers:
                     db_col = excel_to_db_map.get(col, col)
                     if db_col in df_db_expanded.columns:
-                        valor_db = row_db[db_col]
-                        new_row[col] = "" if valor_db is None or pd.isna(valor_db) else str(valor_db)
+                        new_row[col] = "" if pd.isna(row_db[db_col]) else str(row_db[db_col])
                 new_row["ticket"] = ticket_db
                 new_row["apartment_id"] = apt_db
                 df_sheet = pd.concat([df_sheet, pd.DataFrame([new_row])], ignore_index=True)
@@ -301,7 +228,6 @@ def actualizar_google_sheet_desde_db(sheet_id, sheet_name="Viabilidades"):
 
     except Exception as e:
         st.toast(f"❌ Error al actualizar la hoja de Google Sheets: {e}")
-        st.error(f"Error detallado: {str(e)}")
 
 
 def cargar_contratos_google():
@@ -454,39 +380,28 @@ def cargar_contratos_google():
         return pd.DataFrame()
 
 def cargar_usuarios():
-    """Carga los usuarios desde PostgreSQL usando context managers."""
+    """Carga los usuarios desde la base de datos."""
+    conn = obtener_conexion()
+    if not conn:
+        return []  # Salida temprana si la conexión falla
+
     try:
-        with obtener_conexion() as conn:
-            with conn.cursor() as cursor:
-                cursor.execute("SELECT id, username, role, email FROM usuarios")
-                return cursor.fetchall()
-    except psycopg2.Error as e:
+        with conn:  # `with` cierra automáticamente
+            return conn.execute("SELECT id, username, role, email FROM usuarios").fetchall()
+    except sqlite3.Error as e:
         print(f"Error al cargar los usuarios: {e}")
         return []
 
 # Función para agregar un nuevo usuario
 def agregar_usuario(username, rol, password, email):
-    conn = None
-    cursor = None
+    conn = obtener_conexion()
+    cursor = conn.cursor()
+    hashed_pw = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+
     try:
-        conn = obtener_conexion()
-        if not conn:
-            st.toast("❌ Error de conexión a la base de datos")
-            return
-
-        cursor = conn.cursor()
-        hashed_pw = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
-
-        # PostgreSQL usa %s en lugar de ?
-        cursor.execute(
-            "INSERT INTO usuarios (username, password_hash, role, email) VALUES (%s, %s, %s, %s)",
-            (username, hashed_pw, rol, email)
-        )
-
+        cursor.execute("INSERT INTO usuarios (username, password, role, email) VALUES (%s, %s, %s, %s)", (username, hashed_pw, rol, email))
         conn.commit()
-        st.toast(f"✅ Usuario '{username}' creado con éxito.")
-
-        # Registrar en trazabilidad (función ya actualizada)
+        st.toast(f"Usuario '{username}' creado con éxito.")
         log_trazabilidad(st.session_state["username"], "Agregar Usuario",
                          f"El admin agregó al usuario '{username}' con rol '{rol}'.")
 
@@ -507,234 +422,123 @@ def agregar_usuario(username, rol, password, email):
         )
         correo_usuario(email, asunto, mensaje)  # Llamada a la función de correo
 
-    except psycopg2.IntegrityError as e:
-        # Error de integridad (usuario duplicado)
-        st.toast(f"❌ El usuario '{username}' ya existe.")
-        print(f"Error de integridad: {e}")
-
-    except psycopg2.Error as e:
-        st.toast(f"❌ Error al crear el usuario: {e}")
-        print(f"Error PostgreSQL: {e}")
-
+    except sqlite3.IntegrityError:
+        st.toast(f"El usuario '{username}' ya existe.")
     finally:
-        if cursor:
-            cursor.close()
-        if conn:
-            conn.close()
-
+        conn.close()
 
 def editar_usuario(id, username, rol, password, email):
-    conn = None
-    cursor = None
+    conn = obtener_conexion()
+    cursor = conn.cursor()
 
-    try:
-        conn = obtener_conexion()
-        if not conn:
-            st.toast("❌ Error de conexión a la base de datos")
-            return
+    # Obtenemos los datos actuales del usuario
+    cursor.execute("SELECT username, role, email, password FROM usuarios WHERE id = %s", (id,))
+    usuario_actual = cursor.fetchone()
 
-        cursor = conn.cursor()
+    if usuario_actual:
+        # Guardamos los valores actuales
+        username_anterior, rol_anterior, email_anterior, password_anterior = usuario_actual
 
-        # Obtenemos los datos actuales del usuario - PostgreSQL usa %s
-        cursor.execute(
-            "SELECT username, role, email, password_hash FROM usuarios WHERE id = %s",
-            (id,)
-        )
-        usuario_actual = cursor.fetchone()
+        # Realizamos las actualizaciones solo si hay cambios
+        hashed_pw = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode() if password else None
 
-        if usuario_actual:
-            # Guardamos los valores actuales
-            username_anterior, rol_anterior, email_anterior, password_anterior = usuario_actual
-
-            # Realizamos las actualizaciones solo si hay cambios
-            if password:
-                hashed_pw = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
-                # Actualizar con nueva contraseña - PostgreSQL usa %s
-                cursor.execute("""
-                    UPDATE usuarios 
-                    SET username = %s, role = %s, password_hash = %s, email = %s, updated_at = NOW() 
-                    WHERE id = %s
-                """, (username, rol, hashed_pw, email, id))
-            else:
-                # Actualizar sin cambiar contraseña
-                cursor.execute("""
-                    UPDATE usuarios 
-                    SET username = %s, role = %s, email = %s, updated_at = NOW() 
-                    WHERE id = %s
-                """, (username, rol, email, id))
-
-            conn.commit()
-
-            st.toast(f"✅ Usuario con ID {id} actualizado correctamente.")
-
-            # Registrar en trazabilidad
-            log_trazabilidad(
-                st.session_state.get("username", "Sistema"),
-                "Editar Usuario",
-                f"Editó usuario ID {id}: {username_anterior} → {username}"
-            )
-
-            # Ahora creamos el mensaje del correo, especificando qué ha cambiado
-            cambios = []
-
-            if username != username_anterior:
-                cambios.append(
-                    f"📋 Nombre cambiado de <strong>{username_anterior}</strong> a <strong>{username}</strong>.")
-            if rol != rol_anterior:
-                cambios.append(f"🛠 Rol cambiado de <strong>{rol_anterior}</strong> a <strong>{rol}</strong>.")
-            if email != email_anterior:
-                cambios.append(f"📧 Email cambiado de <strong>{email_anterior}</strong> a <strong>{email}</strong>.")
-            if password:  # Si la contraseña fue modificada
-                cambios.append(f"🔑 Tu contraseña ha sido cambiada. Asegúrate de usar una nueva contraseña segura.")
-
-            # Si no hay cambios, se indica en el correo
-            if not cambios:
-                cambios.append("❗ No se realizaron cambios en tu cuenta.")
-
-            # Asunto y cuerpo del correo
-            asunto = "¡Detalles de tu cuenta actualizados!"
-            mensaje = (
-                f"📢 Se han realizado cambios en tu cuenta con los siguientes detalles:<br><br>"
-                f"{''.join([f'<strong>{cambio}</strong><br>' for cambio in cambios])}"  # Unimos los cambios en un formato adecuado
-                f"<br>ℹ️ Si no realizaste estos cambios o tienes alguna duda, por favor contacta con el equipo de administración.<br><br>"
-                f"⚠️ <strong>Por seguridad, te recordamos no compartir este correo con nadie. Si no reconoces los cambios, por favor contacta con el equipo de administración de inmediato.</strong><br><br>"
-            )
-
-            # Enviamos el correo
-            correo_usuario(email, asunto, mensaje)  # Llamada a la función de correo
-
+        # Si la contraseña fue cambiada, realizamos la actualización correspondiente
+        if password:
+            cursor.execute("UPDATE usuarios SET username = %s, role = %s, password = %s, email = %s WHERE id = %s",
+                           (username, rol, hashed_pw, email, id))
         else:
-            st.toast(f"❌ Usuario con ID {id} no encontrado.")
+            cursor.execute("UPDATE usuarios SET username = %s, role = %s, email = %s WHERE id = %s",
+                           (username, rol, email, id))
 
-    except psycopg2.IntegrityError as e:
-        # Error de integridad (usuario duplicado)
-        st.toast(f"❌ Error: El usuario '{username}' o email '{email}' ya existe.")
-        if conn:
-            conn.rollback()
+        conn.commit()
+        conn.close()
 
-    except psycopg2.Error as e:
-        st.toast(f"❌ Error al actualizar usuario: {e}")
-        print(f"Error PostgreSQL: {e}")
-        if conn:
-            conn.rollback()
+        st.toast(f"Usuario con ID {id} actualizado correctamente.")
+        log_trazabilidad(st.session_state["username"], "Editar Usuario", f"El admin editó al usuario con ID {id}.")
 
-    finally:
-        if cursor:
-            cursor.close()
-        if conn:
-            conn.close()
+        # Ahora creamos el mensaje del correo, especificando qué ha cambiado
+        cambios = []
+
+        if username != username_anterior:
+            cambios.append(f"📋 Nombre cambiado de <strong>{username_anterior}</strong> a <strong>{username}</strong>.")
+        if rol != rol_anterior:
+            cambios.append(f"🛠 Rol cambiado de <strong>{rol_anterior}</strong> a <strong>{rol}</strong>.")
+        if email != email_anterior:
+            cambios.append(f"📧 Email cambiado de <strong>{email_anterior}</strong> a <strong>{email}</strong>.")
+        if password:  # Si la contraseña fue modificada
+            cambios.append(f"🔑 Tu contraseña ha sido cambiada. Asegúrate de usar una nueva contraseña segura.")
+
+        # Si no hay cambios, se indica en el correo
+        if not cambios:
+            cambios.append("❗ No se realizaron cambios en tu cuenta.")
+
+        # Asunto y cuerpo del correo
+        asunto = "¡Detalles de tu cuenta actualizados!"
+        mensaje = (
+            f"📢 Se han realizado cambios en tu cuenta con los siguientes detalles:<br><br>"
+            f"{''.join([f'<strong>{cambio}</strong><br>' for cambio in cambios])}"  # Unimos los cambios en un formato adecuado
+            f"<br>ℹ️ Si no realizaste estos cambios o tienes alguna duda, por favor contacta con el equipo de administración.<br><br>"
+            f"⚠️ <strong>Por seguridad, te recordamos no compartir este correo con nadie. Si no reconoces los cambios, por favor contacta con el equipo de administración de inmediato.</strong><br><br>"
+        )
+
+        # Enviamos el correo
+        correo_usuario(email, asunto, mensaje)  # Llamada a la función de correo
+    else:
+        conn.close()
+        st.toast(f"Usuario con ID {id} no encontrado.")
 
 # Función para eliminar un usuario
 def eliminar_usuario(id):
-    conn = None
-    cursor = None
+    conn = obtener_conexion()
+    cursor = conn.cursor()
+    cursor.execute("SELECT username, email FROM usuarios WHERE id = %s", (id,))
+    usuario = cursor.fetchone()
 
-    try:
-        conn = obtener_conexion()
-        if not conn:
-            st.toast("❌ Error de conexión a la base de datos")
-            return False
+    if usuario:
+        nombre_usuario = usuario[0]
+        email_usuario = usuario[1]
 
-        cursor = conn.cursor()
+        cursor.execute("DELETE FROM usuarios WHERE id = %s", (id,))
+        conn.commit()
+        conn.close()
+        log_trazabilidad(st.session_state["username"], "Eliminar Usuario", f"El admin eliminó al usuario con ID {id}.")
 
-        # PostgreSQL usa %s en lugar de ?
-        cursor.execute("SELECT username, email FROM usuarios WHERE id = %s", (id,))
-        usuario = cursor.fetchone()
+        # Enviar correo de baja al usuario
+        asunto = "❌ Tu cuenta ha sido desactivada"
+        mensaje = (
+            f"📢 Tu cuenta ha sido desactivada y eliminada de nuestro sistema. <br><br>"
+            f"ℹ️ Si consideras que esto ha sido un error o necesitas más detalles, por favor, contacta con el equipo de administración.<br><br>"
+            f"🔒 <strong>Por seguridad, no compartas este correo con nadie. Si no reconoces esta acción, contacta con el equipo de administración de inmediato.</strong><br><br>"
+        )
 
-        if usuario:
-            nombre_usuario, email_usuario = usuario
-
-            # Opción 1: Eliminación directa (puede fallar si hay FK constraints)
-            cursor.execute("DELETE FROM usuarios WHERE id = %s", (id,))
-            conn.commit()
-
-            st.toast(f"✅ Usuario '{nombre_usuario}' eliminado correctamente.")
-
-            # Registrar trazabilidad
-            log_trazabilidad(
-                st.session_state.get("username", "Sistema"),
-                "Eliminar Usuario",
-                f"Eliminó usuario ID {id}: {nombre_usuario} ({email_usuario})"
-            )
-
-            # Enviar correo de baja al usuario
-            asunto = "❌ Tu cuenta ha sido desactivada"
-            mensaje = (
-                f"📢 Tu cuenta ha sido desactivada y eliminada de nuestro sistema. <br><br>"
-                f"ℹ️ Si consideras que esto ha sido un error o necesitas más detalles, por favor, contacta con el equipo de administración.<br><br>"
-                f"🔒 <strong>Por seguridad, no compartas este correo con nadie. Si no reconoces esta acción, contacta con el equipo de administración de inmediato.</strong><br><br>"
-            )
-
-            correo_usuario(email_usuario, asunto, mensaje)
-            return True
-
-        else:
-            st.toast("❌ Usuario no encontrado.")
-            return False
-
-    except psycopg2.IntegrityError as e:
-        # Error de integridad (probablemente por FK constraints)
-        st.toast(f"❌ No se puede eliminar el usuario porque tiene registros relacionados.")
-        print(f"Error de integridad: {e}")
-        if conn:
-            conn.rollback()
-        return False
-
-    except psycopg2.Error as e:
-        st.toast(f"❌ Error al eliminar usuario: {e}")
-        print(f"Error PostgreSQL: {e}")
-        if conn:
-            conn.rollback()
-        return False
-
-    finally:
-        if cursor:
-            cursor.close()
-        if conn:
-            conn.close()
-
+        correo_usuario(email_usuario, asunto, mensaje)  # Llamada a la función de correo
+    else:
+        st.toast("Usuario no encontrado.")
 
 def cargar_datos_uis():
-    """Carga y cachea los datos de las tablas 'datos_uis', 'comercial_rafa' desde PostgreSQL."""
-    conn = None
-    try:
-        conn = obtener_conexion()
-        if not conn:
-            print("❌ Error: No se pudo conectar a PostgreSQL")
-            return pd.DataFrame(), pd.DataFrame()
+    """Carga y cachea los datos de las tablas 'datos_uis', 'comercial_rafa'."""
+    conn = obtener_conexion()
 
-        # Consulta de datos_uis con PostgreSQL
-        query_datos_uis = """
-            SELECT apartment_id, latitud, longitud, provincia, municipio, poblacion, 
-                   tipo_olt_rental, serviciable, vial, numero, letra, cp, cto_id, 
-                   cto, site_operational_state, apartment_operational_state, zona
-            FROM datos_uis
-        """
+    # Consulta de datos_uis
+    query_datos_uis = """
+        SELECT apartment_id, latitud, longitud, provincia, municipio, poblacion, tipo_olt_rental, serviciable,
+               vial, numero, letra, cp, cto_id, cto, site_operational_state, apartment_operational_state, zona
+        FROM datos_uis
+    """
+    datos_uis = pd.read_sql(query_datos_uis, conn)
 
-        # IMPORTANTE: En PostgreSQL, pd.read_sql funciona igual, pero hay que manejar la conexión cuidadosamente
-        datos_uis = pd.read_sql(query_datos_uis, conn)
-        print(f"✅ Cargados {len(datos_uis)} registros de 'datos_uis'")
+    # Consulta de comercial_rafa
+    query_rafa = """
+        SELECT apartment_id, serviciable, Contrato, provincia, municipio, poblacion,
+               motivo_serviciable, incidencia, motivo_incidencia, nombre_cliente,
+               telefono, direccion_alternativa, observaciones, comercial, comentarios
+        FROM comercial_rafa
+    """
+    comercial_rafa_df = pd.read_sql(query_rafa, conn)
 
-        # Consulta de comercial_rafa
-        query_rafa = """
-            SELECT apartment_id, serviciable, Contrato, provincia, municipio, poblacion,
-                   motivo_serviciable, incidencia, motivo_incidencia, nombre_cliente,
-                   telefono, direccion_alternativa, observaciones, comercial, comentarios
-            FROM comercial_rafa
-        """
-
-        comercial_rafa_df = pd.read_sql(query_rafa, conn)
-        print(f"✅ Cargados {len(comercial_rafa_df)} registros de 'comercial_rafa'")
-
-        return datos_uis, comercial_rafa_df
-
-    except Exception as e:
-        print(f"❌ Error al cargar datos desde PostgreSQL: {e}")
-        return pd.DataFrame(), pd.DataFrame()
-
-    finally:
-        if conn:
-            conn.close()
+    conn.close()
+    #return datos_uis, ofertas_df, comercial_rafa_df
+    return datos_uis, comercial_rafa_df
 
 def limpiar_mapa():
     """Evita errores de re-inicialización del mapa"""
@@ -749,120 +553,48 @@ def cargar_provincias():
 
 
 def cargar_datos_por_provincia(provincia):
-    """Carga datos filtrados por provincia desde PostgreSQL."""
-    conn = None
-    try:
-        conn = obtener_conexion()
-        if not conn:
-            st.error(f"❌ Error de conexión al cargar datos para provincia: {provincia}")
-            return pd.DataFrame(), pd.DataFrame()
+    conn = obtener_conexion()
 
-        # Consulta de datos_UIs CORREGIDA
-        query_datos_uis = """
-            SELECT 
-                apartment_id, 
-                latitud, 
-                longitud, 
-                provincia, 
-                municipio, 
-                poblacion, 
-                vial, 
-                numero,
-                letra,
-                cp,
-                tipo_olt_rental,
-                serviciable,
-                estado,
-                cto,
-                site_operational_state,
-                apartment_operational_state,
-                zona
-            FROM "datos_uis"
-            WHERE provincia = %s
-        """
-        datos_uis = pd.read_sql(query_datos_uis, conn, params=(provincia,))
+    query_datos_uis = """
+        SELECT * 
+        FROM datos_uis
+        WHERE provincia = %s
+    """
+    datos_uis = pd.read_sql(query_datos_uis, conn, params=(provincia,))
 
-        # Consulta de comercial_rafa CORREGIDA
-        query_comercial_rafa = """
-            SELECT 
-                apartment_id, 
-                comercial, 
-                serviciable, 
-                incidencia, 
-                "Contrato" as contrato,
-                motivo_serviciable,
-                motivo_incidencia,
-                nombre_cliente,
-                telefono,
-                direccion_alternativa,
-                observaciones,
-                comentarios
-            FROM comercial_rafa
-            WHERE provincia = %s
-        """
-        comercial_rafa_df = pd.read_sql(query_comercial_rafa, conn, params=(provincia,))
+    query_comercial_rafa = """
+        SELECT * 
+        FROM comercial_rafa
+        WHERE provincia = %s
+    """
+    comercial_rafa_df = pd.read_sql(query_comercial_rafa, conn, params=(provincia,))
 
-        st.success(f"✅ Cargados {len(datos_uis)} registros de 'datos_UIs' y {len(comercial_rafa_df)} de 'comercial_rafa' para {provincia}")
-
-        return datos_uis, comercial_rafa_df
-
-    except Exception as e:
-        st.error(f"❌ Error al cargar datos para provincia {provincia}: {e}")
-        import traceback
-        st.code(traceback.format_exc())
-        return pd.DataFrame(), pd.DataFrame()
-
-    finally:
-        if conn:
-            conn.close()
+    conn.close()
+    return datos_uis, comercial_rafa_df
 
 # ============================================
 # FUNCIONES DE CARGUE OPTIMIZADAS
 # ============================================
-from typing import List
+
 @st.cache_data(ttl=600, max_entries=20)
 def cargar_provincias() -> List[str]:
-    """Carga la lista de provincias disponibles desde PostgreSQL (cache por 10 minutos)"""
-    conn = None
+    """Carga la lista de provincias disponibles (cache por 10 minutos)"""
+    conn = obtener_conexion()
     try:
-        conn = obtener_conexion()
-        if not conn:
-            print("❌ Error de conexión al cargar provincias")
-            return []
-
-        # La consulta es igual, pero funciona con PostgreSQL
         query = "SELECT DISTINCT provincia FROM datos_uis WHERE provincia IS NOT NULL ORDER BY provincia"
         df = pd.read_sql(query, conn)
-
-        if df.empty:
-            print("⚠️ No se encontraron provincias en la tabla 'datos_uis'")
-            return []
-
-        provincias = df['provincia'].tolist()
-        print(f"✅ {len(provincias)} provincias cargadas desde PostgreSQL")
-        return provincias
-
-    except Exception as e:
-        print(f"❌ Error al cargar provincias desde PostgreSQL: {e}")
-        return []
-
+        return df['provincia'].tolist()
     finally:
-        if conn:
-            conn.close()
+        conn.close()
 
 
 @st.cache_data(ttl=300, max_entries=50)
 def cargar_datos_por_provincia(provincia: str) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    """Carga datos de una provincia específica con columnas esenciales desde PostgreSQL"""
-    conn = None
+    """Carga datos de una provincia específica con columnas esenciales"""
+    conn = obtener_conexion()
     try:
-        conn = obtener_conexion()
-        if not conn:
-            print(f"❌ Error de conexión al cargar datos para provincia: {provincia}")
-            return pd.DataFrame(), pd.DataFrame()
-
-        # Solo columnas necesarias para el mapa - PostgreSQL usa %s
-        query_uis = """
+        # Solo columnas necesarias para el mapa
+        query_uis = f"""
             SELECT apartment_id, latitud, longitud, provincia, municipio, 
                    poblacion, vial, numero
             FROM datos_uis 
@@ -874,7 +606,7 @@ def cargar_datos_por_provincia(provincia: str) -> Tuple[pd.DataFrame, pd.DataFra
             LIMIT 1000  -- Limitar para carga rápida
         """
 
-        query_comercial = """
+        query_comercial = f"""
             SELECT apartment_id, comercial, serviciable, incidencia, contrato
             FROM comercial_rafa c
             WHERE EXISTS (
@@ -889,227 +621,76 @@ def cargar_datos_por_provincia(provincia: str) -> Tuple[pd.DataFrame, pd.DataFra
 
         # Optimizar tipos de datos
         if not datos_uis.empty and 'latitud' in datos_uis.columns and 'longitud' in datos_uis.columns:
-            # Convertir a float, manejando posibles None
-            datos_uis['latitud'] = pd.to_numeric(datos_uis['latitud'], errors='coerce')
-            datos_uis['longitud'] = pd.to_numeric(datos_uis['longitud'], errors='coerce')
-
-        print(
-            f"✅ Cargados {len(datos_uis)} registros de datos_uis y {len(comercial_rafa)} de comercial_rafa para {provincia}")
+            datos_uis[['latitud', 'longitud']] = datos_uis[['latitud', 'longitud']].astype(float)
 
         return datos_uis, comercial_rafa
-
-    except Exception as e:
-        print(f"❌ Error al cargar datos por provincia {provincia}: {e}")
-        return pd.DataFrame(), pd.DataFrame()
-
     finally:
-        if conn:
-            conn.close()
+        conn.close()
 
 
 @st.cache_data(ttl=300, max_entries=10)
 def cargar_datos_limitados() -> Tuple[pd.DataFrame, pd.DataFrame]:
-    """Carga datos limitados para vista inicial rápida desde PostgreSQL"""
-    conn = None
+    """Carga datos limitados para vista inicial rápida"""
+    conn = obtener_conexion()
     try:
-        conn = obtener_conexion()
-        if not conn:
-            st.error("❌ Error de conexión a la base de datos")
-            return pd.DataFrame(), pd.DataFrame()
-
-        # CONSULTA CORREGIDA - usando el nombre exacto de la tabla
+        # Solo primeros 500 registros para carga rápida
         query_uis = """
-            SELECT 
-                apartment_id, 
-                latitud, 
-                longitud, 
-                COALESCE(provincia, '') as provincia,
-                COALESCE(municipio, '') as municipio,
-                COALESCE(poblacion, '') as poblacion,
-                COALESCE(vial, '') as vial,
-                COALESCE(numero, '') as numero,
-                COALESCE(letra, '') as letra,
-                COALESCE(cp, '') as cp,
-                COALESCE(serviciable, '') as serviciable,
-                COALESCE(estado, '') as estado
-            FROM "datos_uis" 
+            SELECT apartment_id, latitud, longitud, provincia, municipio, 
+                   poblacion, vial, numero
+            FROM datos_uis 
             WHERE latitud IS NOT NULL 
             AND longitud IS NOT NULL
             AND latitud != 0 
             AND longitud != 0
-            ORDER BY apartment_id
-            LIMIT 1000
+            LIMIT 500
         """
 
-        # CONSULTA CORREGIDA para comercial_rafa
         query_comercial = """
-            SELECT 
-                apartment_id, 
-                COALESCE(comercial, '') as comercial, 
-                COALESCE(serviciable, '') as serviciable, 
-                COALESCE(incidencia, '') as incidencia, 
-                COALESCE("Contrato", '') as contrato,
-                COALESCE(nombre_cliente, '') as nombre_cliente,
-                COALESCE(telefono, '') as telefono,
-                COALESCE(comentarios, '') as comentarios
+            SELECT apartment_id, comercial, serviciable, incidencia, contrato
             FROM comercial_rafa
-            ORDER BY apartment_id
-            LIMIT 2000
+            LIMIT 1000
         """
 
         datos_uis = pd.read_sql(query_uis, conn)
         comercial_rafa = pd.read_sql(query_comercial, conn)
 
-        # Asegurar tipos de datos
-        if not datos_uis.empty:
-            for col in ['latitud', 'longitud']:
-                if col in datos_uis.columns:
-                    datos_uis[col] = pd.to_numeric(datos_uis[col], errors='coerce')
-
-            # Filtrar nulos después de conversión
-            datos_uis = datos_uis.dropna(subset=['latitud', 'longitud'])
-
-        st.success(f"✅ Datos cargados: {len(datos_uis)} ubicaciones, {len(comercial_rafa)} comerciales")
-
-        # DEBUG: Mostrar información
-        with st.expander("🔍 DEBUG - Datos cargados", expanded=False):
-            st.write("**datos_uis:**", datos_uis.shape)
-            st.dataframe(datos_uis.head(5))
-            st.write("**comercial_rafa:**", comercial_rafa.shape)
-            st.dataframe(comercial_rafa.head(5))
+        if not datos_uis.empty and 'latitud' in datos_uis.columns and 'longitud' in datos_uis.columns:
+            datos_uis[['latitud', 'longitud']] = datos_uis[['latitud', 'longitud']].astype(float)
 
         return datos_uis, comercial_rafa
-
-    except Exception as e:
-        st.error(f"❌ Error al cargar datos limitados: {e}")
-        import traceback
-        st.code(traceback.format_exc())
-        return pd.DataFrame(), pd.DataFrame()
-
     finally:
-        if conn:
-            conn.close()
+        conn.close()
 
 
 @st.cache_data(ttl=300)
 def buscar_por_id(apartment_id: str) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    """Búsqueda optimizada por ID de apartment en PostgreSQL"""
-    conn = None
+    """Búsqueda optimizada por ID de apartment"""
+    conn = obtener_conexion()
     try:
-        conn = obtener_conexion()
-        if not conn:
-            st.error("❌ Error de conexión a la base de datos")
-            return pd.DataFrame(), pd.DataFrame()
-
-        # Limpiar el ID de búsqueda
-        apt_id_clean = str(apartment_id).strip().upper()
-
-        # CONSULTA CORREGIDA - tabla con comillas dobles
-        query_uis = """
-            SELECT 
-                apartment_id, 
-                latitud, 
-                longitud, 
-                COALESCE(provincia, '') as provincia,
-                COALESCE(municipio, '') as municipio,
-                COALESCE(poblacion, '') as poblacion,
-                COALESCE(vial, '') as vial,
-                COALESCE(numero, '') as numero,
-                COALESCE(letra, '') as letra,
-                COALESCE(cp, '') as cp,
-                COALESCE(serviciable, '') as serviciable,
-                COALESCE(estado, '') as estado
-            FROM "datos_uis" 
-            WHERE UPPER(TRIM(apartment_id)) = %s
-            OR apartment_id ILIKE %s
+        query_uis = f"""
+            SELECT apartment_id, latitud, longitud, provincia, municipio, 
+                   poblacion, vial, numero
+            FROM datos_uis 
+            WHERE apartment_id = %s 
+            AND latitud IS NOT NULL 
+            AND longitud IS NOT NULL
         """
 
-        # Parámetros para búsqueda
-        params = (apt_id_clean, f"%{apt_id_clean}%")
+        query_comercial = f"""
+            SELECT apartment_id, comercial, serviciable, incidencia, contrato
+            FROM comercial_rafa
+            WHERE apartment_id = %s
+        """
 
-        datos_uis = pd.read_sql(query_uis, conn, params=params)
+        datos_uis = pd.read_sql(query_uis, conn, params=(apartment_id,))
+        comercial_rafa = pd.read_sql(query_comercial, conn, params=(apartment_id,))
 
-        if datos_uis.empty:
-            # Intentar búsqueda más amplia
-            query_partial = """
-                SELECT 
-                    apartment_id, 
-                    latitud, 
-                    longitud, 
-                    provincia, 
-                    municipio, 
-                    poblacion, 
-                    vial, 
-                    numero,
-                    letra,
-                    cp,
-                    serviciable,
-                    estado
-                FROM "datos_uis" 
-                WHERE apartment_id ILIKE %s
-                LIMIT 10
-            """
-            datos_uis = pd.read_sql(query_partial, conn, params=(f"%{apt_id_clean}%",))
-
-        # Buscar en comercial_rafa si hay resultados
-        if not datos_uis.empty:
-            apt_ids = tuple(datos_uis['apartment_id'].unique())
-
-            # Construir consulta dinámica para múltiples IDs
-            if len(apt_ids) == 1:
-                query_comercial = """
-                    SELECT 
-                        apartment_id, 
-                        comercial, 
-                        serviciable, 
-                        incidencia, 
-                        "Contrato" as contrato,
-                        nombre_cliente,
-                        telefono,
-                        comentarios
-                    FROM comercial_rafa
-                    WHERE apartment_id = %s
-                """
-                comercial_rafa = pd.read_sql(query_comercial, conn, params=(apt_ids[0],))
-            else:
-                placeholders = ','.join(['%s'] * len(apt_ids))
-                query_comercial = f"""
-                    SELECT 
-                        apartment_id, 
-                        comercial, 
-                        serviciable, 
-                        incidencia, 
-                        "Contrato" as contrato,
-                        nombre_cliente,
-                        telefono,
-                        comentarios
-                    FROM comercial_rafa
-                    WHERE apartment_id IN ({placeholders})
-                """
-                comercial_rafa = pd.read_sql(query_comercial, conn, params=apt_ids)
-        else:
-            comercial_rafa = pd.DataFrame()
-
-        # Asegurar tipos de datos
-        if not datos_uis.empty:
-            for col in ['latitud', 'longitud']:
-                if col in datos_uis.columns:
-                    datos_uis[col] = pd.to_numeric(datos_uis[col], errors='coerce')
-            datos_uis = datos_uis.dropna(subset=['latitud', 'longitud'])
-
-        st.toast(f"🔍 Encontrados {len(datos_uis)} apartments para '{apartment_id}'")
+        if not datos_uis.empty and 'latitud' in datos_uis.columns and 'longitud' in datos_uis.columns:
+            datos_uis[['latitud', 'longitud']] = datos_uis[['latitud', 'longitud']].astype(float)
 
         return datos_uis, comercial_rafa
-
-    except Exception as e:
-        st.error(f"❌ Error al buscar por ID: {e}")
-        import traceback
-        st.code(traceback.format_exc())
-        return pd.DataFrame(), pd.DataFrame()
-
     finally:
-        if conn:
-            conn.close()
+        conn.close()
 
 
 # ============================================
@@ -1732,78 +1313,20 @@ def mostrar_info_apartamento(apartment_id, datos_df, comercial_rafa_df):
 
 
 def guardar_comentario(apartment_id, comentario, tabla):
-    """Guarda un comentario en PostgreSQL para un apartment_id específico."""
-    conn = None
-    cursor = None
-
     try:
-        # Validar que la tabla sea una de las permitidas (seguridad)
-        tablas_permitidas = ['comercial_rafa', 'datos_uis', 'contratos', 'viabilidades']
-
-        if tabla not in tablas_permitidas:
-            st.toast(f"❌ Tabla '{tabla}' no permitida para guardar comentarios")
-            return False
-
+        # Conexión a la base de datos (cambia la ruta o la conexión según corresponda)
         conn = obtener_conexion()
-        if not conn:
-            st.toast("❌ Error de conexión a la base de datos")
-            return False
-
         cursor = conn.cursor()
 
-        # Primero, verificar si el apartment_id existe en la tabla
-        cursor.execute(f"""
-            SELECT EXISTS (
-                SELECT 1 FROM {tabla} 
-                WHERE apartment_id = %s
-            )
-        """, (apartment_id,))
-
-        existe = cursor.fetchone()[0]
-
-        if not existe:
-            st.toast(f"❌ El apartment_id '{apartment_id}' no existe en la tabla '{tabla}'")
-            return False
-
-        # Actualizar el comentario - PostgreSQL usa %s
+        # Actualizar el comentario para el registro con el apartment_id dado
         query = f"UPDATE {tabla} SET comentarios = %s WHERE apartment_id = %s"
         cursor.execute(query, (comentario, apartment_id))
-
-        # Verificar si se actualizó alguna fila
-        filas_afectadas = cursor.rowcount
         conn.commit()
-
-        if filas_afectadas > 0:
-            st.toast(f"✅ Comentario guardado correctamente para {apartment_id}")
-
-            # Registrar en trazabilidad
-            log_trazabilidad(
-                st.session_state.get("username", "Sistema"),
-                "Guardar Comentario",
-                f"Guardó comentario en {tabla} para apartment_id: {apartment_id}"
-            )
-            return True
-        else:
-            st.toast(f"⚠️ No se pudo actualizar el comentario para {apartment_id}")
-            return False
-
-    except psycopg2.Error as e:
-        st.toast(f"❌ Error de base de datos: {e}")
-        print(f"Error PostgreSQL: {e}")
-        if conn:
-            conn.rollback()
-        return False
-
+        conn.close()
+        return True
     except Exception as e:
-        st.toast(f"❌ Error al actualizar la base de datos: {str(e)}")
-        print(f"Error general: {e}")
+        st.toast(f"Error al actualizar la base de datos: {str(e)}")
         return False
-
-    finally:
-        if cursor:
-            cursor.close()
-        if conn:
-            conn.close()
 
 def upload_file_to_cloudinary(file, public_id=None, folder=None):
     """
@@ -1875,39 +1398,21 @@ def viabilidades_seccion():
         with st.spinner("⏳ Cargando los datos de viabilidades..."):
             try:
                 conn = obtener_conexion()
-
-                # Verificar si la tabla existe en PostgreSQL
-                cursor = conn.cursor()
-                cursor.execute("""
-                    SELECT EXISTS (
-                        SELECT FROM information_schema.tables 
-                        WHERE table_schema = 'public' 
-                        AND table_name = 'viabilidades'
-                    )
-                """)
-
-                tabla_existe = cursor.fetchone()[0]
-
-                if not tabla_existe:
-                    st.toast("❌ La tabla 'viabilidades' no se encuentra en la base de datos PostgreSQL.")
-                    cursor.close()
+                tables = pd.read_sql("SELECT name FROM sqlite_master WHERE type='table';", conn)
+                if 'viabilidades' not in tables['name'].values:
+                    st.toast("❌ La tabla 'viabilidades' no se encuentra en la base de datos.")
                     conn.close()
                     return
 
-                # Cargar datos con columnas específicas (mejor que SELECT *)
-                query = """
-                    SELECT *
-                    FROM viabilidades
-                """
-                viabilidades_df = pd.read_sql(query, conn)
-                if 'comentario' in viabilidades_df.columns:
-                    viabilidades_df = viabilidades_df.rename(columns={'comentario': 'comentarios'})
-
-                cursor.close()
+                viabilidades_df = pd.read_sql("SELECT * FROM viabilidades", conn)
                 conn.close()
 
+                if viabilidades_df.empty:
+                    st.warning("⚠️ No hay viabilidades disponibles.")
+                    return
+
             except Exception as e:
-                st.toast(f"❌ Error al cargar viabilidades desde PostgreSQL: {e}")
+                st.toast(f"❌ Error al cargar los datos de la base de datos: {e}")
                 return
 
         # Verificamos columnas necesarias
@@ -1922,29 +1427,12 @@ def viabilidades_seccion():
         # ✅ CORRECCIÓN 2: Agregar columna que indica si tiene presupuesto asociado
         try:
             conn = obtener_conexion()
-            # Verificar si la tabla existe primero
-            cursor = conn.cursor()
-            cursor.execute("""
-                SELECT EXISTS (
-                    SELECT FROM information_schema.tables 
-                    WHERE table_schema = 'public' 
-                    AND table_name = 'presupuestos_viabilidades'
-                )
-            """)
-
-            if cursor.fetchone()[0]:
-                presupuestos_df = pd.read_sql(
-                    "SELECT DISTINCT ticket FROM presupuestos_viabilidades",
-                    conn
-                )
-                viabilidades_df['tiene_presupuesto'] = viabilidades_df['ticket'].isin(presupuestos_df['ticket'])
-            else:
-                viabilidades_df['tiene_presupuesto'] = False
-
-            cursor.close()
+            presupuestos_df = pd.read_sql("SELECT DISTINCT ticket FROM presupuestos_viabilidades", conn)
             conn.close()
+            # Usar .loc para una asignación segura
+            viabilidades_df.loc[:, 'tiene_presupuesto'] = viabilidades_df['ticket'].isin(presupuestos_df['ticket'])
         except Exception as e:
-            viabilidades_df['tiene_presupuesto'] = False
+            viabilidades_df.loc[:, 'tiene_presupuesto'] = False
 
         def highlight_duplicates(val):
             if isinstance(val, str) and val in viabilidades_df[viabilidades_df['is_duplicate']]['apartment_id'].values:
@@ -2326,27 +1814,21 @@ def viabilidades_seccion():
                                 # 🔹 Registrar el envío en la base de datos con URL
                                 try:
                                     conn = obtener_conexion()
-                                    if conn is None:
-                                        st.toast(
-                                            f"⚠️ Correo enviado a {correo}, pero no se pudo registrar en la BBDD: Sin conexión")
-                                    else:
-                                        cursor = conn.cursor()
-                                        cursor.execute("""
-                                            INSERT INTO envios_presupuesto_viabilidad 
-                                            (ticket, destinatario, proyecto, fecha_envio, archivo_nombre, archivo_url)
-                                            VALUES (%s, %s, %s, %s, %s, %s)
-                                        """, (
-                                            st.session_state["selected_ticket"],
-                                            correo,
-                                            proyecto,
-                                            datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                                            nombre_archivo,
-                                            cloudinary_url
-                                        ))
-                                        conn.commit()
-                                        cursor.close()
-                                        conn.close()
-                                        st.toast(f"✅ Registro guardado en PostgreSQL para {correo}")
+                                    cursor = conn.cursor()
+                                    cursor.execute("""
+                                        INSERT INTO envios_presupuesto_viabilidad 
+                                        (ticket, destinatario, proyecto, fecha_envio, archivo_nombre, archivo_url)
+                                        VALUES (%s, %s, %s, %s, %s, %s)
+                                    """, (
+                                        st.session_state["selected_ticket"],
+                                        correo,
+                                        proyecto,
+                                        datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                                        nombre_archivo,
+                                        cloudinary_url
+                                    ))
+                                    conn.commit()
+                                    conn.close()
                                 except Exception as db_error:
                                     st.toast(
                                         f"⚠️ Correo enviado a {correo}, pero no se pudo registrar en la BBDD: {db_error}"
@@ -2356,22 +1838,18 @@ def viabilidades_seccion():
                             try:
                                 conn = obtener_conexion()
                                 cursor = conn.cursor()
-
-                                # CAMBIO PRINCIPAL: ? → %s para PostgreSQL
                                 cursor.execute("""
                                     UPDATE viabilidades
                                     SET presupuesto_enviado = 1
                                     WHERE ticket = %s
-                                """, (st.session_state["selected_ticket"],))  # Mantener la tupla con un elemento
-
+                                """, (st.session_state["selected_ticket"],))
                                 conn.commit()
-                                cursor.close()
                                 conn.close()
                                 st.toast("🗂️ Se ha registrado en la BBDD que el presupuesto en PDF ha sido enviado.")
-
                             except Exception as db_error:
                                 st.toast(
-                                    f"⚠️ El correo fue enviado, pero hubo un error al actualizar la BBDD: {db_error}")
+                                    f"⚠️ El correo fue enviado, pero hubo un error al actualizar la BBDD: {db_error}"
+                                )
 
                             st.toast("✅ Presupuesto en PDF enviado y guardado correctamente en Cloudinary.")
                         except Exception as e:
@@ -2384,7 +1862,7 @@ def viabilidades_seccion():
                     SELECT fecha_envio, destinatario, proyecto, archivo_nombre
                     FROM envios_presupuesto_viabilidad
                     WHERE ticket = %s
-                    ORDER BY fecha_envio DESC
+                    ORDER BY datetime(fecha_envio) DESC
                 """, conn, params=(st.session_state["selected_ticket"],))
                 conn.close()
 
@@ -2627,244 +2105,148 @@ def viabilidades_seccion():
 
 # Función para obtener conexión a la base de datos (SQLite Cloud)
 def get_db_connection():
-    """Retorna una conexión a la base de datos PostgreSQL (reemplazo de SQLite Cloud)."""
-    try:
-        # Usar la misma función obtener_conexion() que ya creamos
-        return obtener_conexion()
-    except Exception as e:
-        print(f"❌ Error en get_db_connection: {e}")
-        return None
-
+    return sqlitecloud.connect(
+        "sqlitecloud://ceafu04onz.g6.sqlite.cloud:8860/usuarios.db%sapikey=Qo9m18B9ONpfEGYngUKm99QB5bgzUTGtK7iAcThmwvY"
+    )
 
 def generar_ticket():
-    """Genera un ticket único con formato: añomesdia(numero_consecutivo) para PostgreSQL"""
-    conn = obtener_conexion()
-    if not conn:
-        # Si no hay conexión, generar un ticket basado en timestamp
-        fecha_actual = datetime.now().strftime("%Y%m%d")
-        import random
-        return f"{fecha_actual}{random.randint(100, 999):03d}"
-
+    """Genera un ticket único con formato: añomesdia(numero_consecutivo)"""
+    conn = get_db_connection()
     cursor = conn.cursor()
     fecha_actual = datetime.now().strftime("%Y%m%d")
 
-    try:
-        # Buscar el mayor número consecutivo para la fecha actual - PostgreSQL usa %s
-        # Nota: SUBSTR funciona igual en PostgreSQL, pero usamos %s en lugar de ?
-        cursor.execute(
-            "SELECT MAX(CAST(SUBSTR(ticket, 9, 3) AS INTEGER)) FROM viabilidades WHERE ticket LIKE %s",
-            (f"{fecha_actual}%",)  # El patrón con % al final
-        )
+    # Buscar el mayor número consecutivo para la fecha actual
+    cursor.execute("SELECT MAX(CAST(SUBSTR(ticket, 9, 3) AS INTEGER)) FROM viabilidades WHERE ticket LIKE %s",
+                   (f"{fecha_actual}%",))
+    max_consecutivo = cursor.fetchone()[0]
 
-        resultado = cursor.fetchone()
-        max_consecutivo = resultado[0] if resultado else None
+    # Si no hay tickets previos, empezar desde 1
+    if max_consecutivo is None:
+        max_consecutivo = 0
 
-        # Si no hay tickets previos, empezar desde 1
-        if max_consecutivo is None:
-            max_consecutivo = 0
-
-        # Generar el nuevo ticket con el siguiente consecutivo
-        ticket = f"{fecha_actual}{max_consecutivo + 1:03d}"
-        return ticket
-
-    except psycopg2.Error as e:
-        print(f"❌ Error PostgreSQL al generar ticket: {e}")
-        # Fallback: ticket basado en timestamp
-        import time
-        return f"{fecha_actual}{int(time.time()) % 1000:03d}"
-    except Exception as e:
-        print(f"❌ Error al generar ticket: {e}")
-        return f"{fecha_actual}001"
-    finally:
-        if cursor:
-            cursor.close()
-        conn.close()
-
+    # Generar el nuevo ticket con el siguiente consecutivo
+    ticket = f"{fecha_actual}{max_consecutivo + 1:03d}"
+    conn.close()
+    return ticket
 
 def guardar_viabilidad(datos):
     """
-    Inserta los datos en la tabla Viabilidades en PostgreSQL.
+    Inserta los datos en la tabla Viabilidades.
     Se espera que 'datos' sea una tupla con el siguiente orden:
-    (latitud, longitud, provincia, municipio, poblacion, vial, numero, letra, cp, comentario,
-     ticket, nombre_cliente, telefono, comercial, olt_info, apartment_id, fecha_entrega, estado_obra)
+    (latitud, longitud, provincia, municipio, poblacion, vial, numero, letra, cp, comentario, ticket, nombre_cliente, telefono, usuario)
     """
-    conn = None
-    cursor = None
+    # Guardar los datos en la base de datos
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO viabilidades (
+            latitud, 
+            longitud, 
+            provincia, 
+            municipio, 
+            poblacion, 
+            vial, 
+            numero, 
+            letra, 
+            cp, 
+            comentario, 
+            fecha_viabilidad, 
+            ticket, 
+            nombre_cliente, 
+            telefono, 
+            usuario,
+            olt,
+            apartment_id,
+            fecha_entrega,  -- 🔹 NUEVO CAMPO
+            estado_obra     -- 🔹 NUEVO CAMPO
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP, %s, %s, %s, %s, %s, %s, %s, %s)
+    """, datos)
+    conn.commit()
 
-    try:
-        # Validar datos antes de intentar guardar
-        if not datos or len(datos) < 18:
-            st.error("❌ Error: Datos incompletos para guardar la viabilidad")
-            return False
+    # Obtener los emails de todos los administradores
+    cursor.execute("SELECT email FROM usuarios WHERE role = 'admin'")
+    resultados = cursor.fetchall()
+    emails_admin = [fila[0] for fila in resultados]
 
-        conn = obtener_conexion()
-        if not conn:
-            st.error("❌ Error de conexión a la base de datos")
-            return False
+    # Obtener email del comercial seleccionado
+    comercial_email = None
+    cursor.execute("SELECT email FROM usuarios WHERE username = %s", (datos[13],))
+    fila = cursor.fetchone()
+    if fila:
+        comercial_email = fila[0]
 
-        cursor = conn.cursor()
+    conn.close()
 
-        # DEPURACIÓN: Mostrar los datos que se van a insertar
-        st.info(f"🔍 Intentando guardar viabilidad con ticket: {datos[10]}")
+    # Información de la viabilidad
+    ticket_id = datos[10]  # 'ticket'
+    nombre_comercial = datos[13]  # 👈 el comercial elegido en el formulario
+    descripcion_viabilidad = (
+        f"📝 Viabilidad para el ticket {ticket_id}:<br><br>"
+        f"🧑‍💼 Comercial: {nombre_comercial}<br><br>"
+        f"📍 Latitud: {datos[0]}<br>"
+        f"📍 Longitud: {datos[1]}<br>"
+        f"🏞️ Provincia: {datos[2]}<br>"
+        f"🏙️ Municipio: {datos[3]}<br>"
+        f"🏘️ Población: {datos[4]}<br>"
+        f"🛣️ Vial: {datos[5]}<br>"
+        f"🔢 Número: {datos[6]}<br>"
+        f"🔤 Letra: {datos[7]}<br>"
+        f"🏷️ Código Postal (CP): {datos[8]}<br>"
+        f"💬 Comentario: {datos[9]}<br>"
+        f"👥 Nombre Cliente: {datos[11]}<br>"
+        f"📞 Teléfono: {datos[12]}<br><br>"
+        f"🏢 OLT: {datos[14]}<br>"
+        f"🏘️ Apartment ID: {datos[15]}<br><br>"
+    )
+    # 🔹 Agregar los nuevos campos si tienen valor
+    if datos[16]:  # fecha_entrega
+        descripcion_viabilidad += f"📅 Fecha de entrega: {datos[16]}<br>"
 
-        # Verificar si el ticket ya existe para evitar duplicados
-        cursor.execute("SELECT COUNT(*) FROM viabilidades WHERE ticket = %s", (datos[10],))
-        existe = cursor.fetchone()[0]
+    if datos[17]:  # estado_obra
+        descripcion_viabilidad += f"🏗️ Estado de la obra: {datos[17]}<br>"
 
-        if existe > 0:
-            st.warning(f"⚠️ El ticket {datos[10]} ya existe en la base de datos")
+    descripcion_viabilidad += (
+        f"<br>"
+        f"ℹ️ Por favor, revise todos los detalles de la viabilidad para asegurar que toda la información esté correcta. "
+        f"Si tiene alguna pregunta o necesita más detalles, no dude en ponerse en contacto con el comercial {nombre_comercial} o con el equipo responsable."
+    )
 
-            # Preguntar si se desea actualizar
-            if st.button("¿Actualizar viabilidad existente?"):
-                # Actualizar la viabilidad existente
-                cursor.execute("""
-                    UPDATE viabilidades SET
-                        latitud = %s,
-                        longitud = %s,
-                        provincia = %s,
-                        municipio = %s,
-                        poblacion = %s,
-                        vial = %s,
-                        numero = %s,
-                        letra = %s,
-                        cp = %s,
-                        comentario = %s,
-                        fecha_viabilidad = NOW(),
-                        nombre_cliente = %s,
-                        telefono = %s,
-                        comercial = %s,
-                        olt_info = %s,
-                        apartment_id = %s,
-                        fecha_entrega = %s,
-                        estado_obra = %s
-                    WHERE ticket = %s
-                """, (*datos, datos[10]))
+    # Enviar la notificación por correo a cada administrador
+    if emails_admin:
+        for email in emails_admin:
+            correo_viabilidad_comercial(email, ticket_id, descripcion_viabilidad)
+        st.toast(
+            f"📧 Se ha enviado una notificación a los administradores: {', '.join(emails_admin)} sobre la viabilidad completada."
+        )
+    else:
+        st.toast("⚠️ No se encontró ningún email de administrador, no se pudo enviar la notificación.")
 
-                conn.commit()
-                st.success(f"✅ Viabilidad actualizada correctamente para ticket: {datos[10]}")
-                return True
-            else:
-                return False
+    # Enviar notificación al comercial seleccionado
+    if comercial_email:
+        correo_viabilidad_comercial(comercial_email, ticket_id, descripcion_viabilidad)
+        st.toast(
+            f"📧 Se ha enviado una notificación al comercial responsable: {nombre_comercial} ({comercial_email})")
+    else:
+        st.toast(f"⚠️ No se pudo encontrar el email del comercial {nombre_comercial}.")
 
-        # PostgreSQL usa %s y NOW() en lugar de CURRENT_TIMESTAMP
-        cursor.execute("""
-            INSERT INTO viabilidades (
-                latitud, 
-                longitud, 
-                provincia, 
-                municipio, 
-                poblacion, 
-                vial, 
-                numero, 
-                letra, 
-                cp, 
-                comentario, 
-                fecha_viabilidad, 
-                ticket, 
-                nombre_cliente, 
-                telefono, 
-                comercial,
-                olt_info,
-                apartment_id,
-                fecha_entrega,
-                estado_obra
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), %s, %s, %s, %s, %s, %s, %s, %s)
-            RETURNING id
-        """, datos)
-
-        # Obtener el ID del nuevo registro
-        nuevo_id = cursor.fetchone()[0]
-        conn.commit()
-
-        st.success(f"✅ Viabilidad guardada correctamente (ID: {nuevo_id}, Ticket: {datos[10]})")
-        st.balloons()  # Efecto visual de celebración
-
-        # Registrar en trazabilidad
-        try:
-            log_trazabilidad(
-                datos[13],  # comercial
-                "Crear Viabilidad",
-                f"Creó nueva viabilidad - Ticket: {datos[10]}, Cliente: {datos[11]}, Ubicación: {datos[2]}, {datos[3]}"
-            )
-        except Exception as e:
-            st.warning(f"⚠️ No se pudo registrar en trazabilidad: {e}")
-
-        # Enviar notificaciones por correo
-        enviar_notificaciones_viabilidad(datos, nuevo_id)
-
-        return True
-
-    except psycopg2.IntegrityError as e:
-        error_msg = str(e)
-        if "unique constraint" in error_msg.lower():
-            st.error(f"❌ Error: El ticket {datos[10]} ya existe en la base de datos")
-        else:
-            st.error(f"❌ Error de integridad en la base de datos: {error_msg}")
-        if conn:
-            conn.rollback()
-        return False
-
-    except psycopg2.Error as e:
-        st.error(f"❌ Error de PostgreSQL: {e}")
-        if conn:
-            conn.rollback()
-        return False
-
-    except Exception as e:
-        st.error(f"❌ Error inesperado al guardar viabilidad: {e}")
-        import traceback
-        st.code(traceback.format_exc())
-        return False
-
-    finally:
-        if cursor:
-            cursor.close()
-        if conn:
-            conn.close()
+    # Mostrar mensaje de éxito en Streamlit
+    st.toast("✅ Los cambios para la viabilidad han sido guardados correctamente")
 
 # Función para obtener viabilidades guardadas en la base de datos
 def obtener_viabilidades():
-    """Obtiene viabilidades desde PostgreSQL."""
-    conn = None
-    cursor = None
-
-    try:
-        # CAMBIO: Usar obtener_conexion() en lugar de get_db_connection()
-        conn = obtener_conexion()
-        if not conn:
-            print("❌ Error: No se pudo conectar a PostgreSQL")
-            return []
-
-        cursor = conn.cursor()
-
-        # La consulta SQL es igual, pero en PostgreSQL podría necesitar ajustes
-        cursor.execute("""
-            SELECT latitud, longitud, ticket, serviciable, apartment_id, direccion_id 
-            FROM viabilidades
-            WHERE latitud IS NOT NULL 
-            AND longitud IS NOT NULL
-        """)
-
-        viabilidades = cursor.fetchall()
-        print(f"✅ {len(viabilidades)} viabilidades obtenidas de PostgreSQL")
-        return viabilidades
-
-    except psycopg2.Error as e:
-        print(f"❌ Error PostgreSQL en obtener_viabilidades: {e}")
-        return []
-    except Exception as e:
-        print(f"❌ Error general en obtener_viabilidades: {e}")
-        return []
-    finally:
-        # Siempre cerrar cursor y conexión
-        if cursor:
-            cursor.close()
-        if conn:
-            conn.close()
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT latitud, longitud, ticket, serviciable, apartment_id, direccion_id 
+        FROM viabilidades
+    """)
+    viabilidades = cursor.fetchall()
+    conn.close()
+    return viabilidades
 
 
 def mostrar_formulario(click_data):
-    """Muestra el formulario para editar los datos de la viabilidad y guarda los cambios en PostgreSQL."""
+    """Muestra el formulario para editar los datos de la viabilidad y guarda los cambios en la base de datos."""
 
     # DEBUG: Verificar qué datos estamos recibiendo
     st.sidebar.write("🔍 DATOS RECIBIDOS:")
@@ -2872,41 +2254,21 @@ def mostrar_formulario(click_data):
     st.sidebar.write(f"Municipio: {click_data.get('municipio', 'NO ENCONTRADO')}")
     st.sidebar.write(f"OLT: {click_data.get('olt', 'NO ENCONTRADO')}")
 
-    # CAMBIO: Usar obtener_conexion() en lugar de get_db_connection()
+    # Obtener valores de la tabla OLT
     conn = obtener_conexion()
-    if not conn:
-        st.error("❌ No se pudo conectar a PostgreSQL")
-        return
-
     cursor = conn.cursor()
+    cursor.execute("SELECT id_olt, nombre_olt FROM olt ORDER BY id_olt ASC")
+    olts = cursor.fetchall()
+    conn.close()
 
-    try:
-        # La consulta es la misma, pero ahora usa conexión PostgreSQL
-        cursor.execute("SELECT id_olt, nombre_olt FROM olt ORDER BY id_olt ASC")
-        olts = cursor.fetchall()
-
-        # Preparar opciones del selectbox: se mostrará "id_olt - nombre_olt"
-        opciones_olt = [f"{olt[0]} - {olt[1]}" for olt in olts]
-
-    except Exception as e:
-        st.error(f"❌ Error al cargar OLTs desde PostgreSQL: {e}")
-        opciones_olt = []
-    finally:
-        cursor.close()
-        conn.close()
+    # Preparar opciones del selectbox: se mostrará "id_olt - nombre_olt"
+    opciones_olt = [f"{olt[0]} - {olt[1]}" for olt in olts]
 
     # Extraer los datos del registro seleccionado
     ticket = click_data["ticket"]
 
     # Inicializar session_state para este ticket si no existe
     if f"form_data_{ticket}" not in st.session_state:
-        # Asegurar tipos de datos para PostgreSQL
-        coste = click_data.get("coste", 0.0)
-        try:
-            coste = float(coste) if coste else 0.0
-        except:
-            coste = 0.0
-
         st.session_state[f"form_data_{ticket}"] = {
             "latitud": click_data.get("latitud", ""),
             "longitud": click_data.get("longitud", ""),
@@ -2924,7 +2286,7 @@ def mostrar_formulario(click_data):
             "id_cto": click_data.get("id_cto", ""),
             "municipio_admin": click_data.get("municipio_admin", ""),
             "serviciable": click_data.get("serviciable", "Sí"),
-            "coste": coste,  # Ya convertido a float
+            "coste": float(click_data.get("coste", 0.0)),
             "comentarios_comercial": click_data.get("comentarios_comercial", ""),
             "comentarios_internos": click_data.get("comentarios_internos", ""),
             "fecha_viabilidad": click_data.get("fecha_viabilidad", ""),
@@ -2936,7 +2298,7 @@ def mostrar_formulario(click_data):
             "confirmacion_rafa": click_data.get("confirmacion_rafa", ""),
             "zona_estudio": click_data.get("zona_estudio", ""),
             "estado": click_data.get("estado", "Sin estado"),
-            "presupuesto_enviado": click_data.get("presupuesto_enviado", False),  # Booleano para PostgreSQL
+            "presupuesto_enviado": click_data.get("presupuesto_enviado", ""),
             "nuevapromocion": click_data.get("nuevapromocion", "NO"),
             "resultado": click_data.get("resultado", "NO"),
             "justificacion": click_data.get("justificacion", "SIN JUSTIFICACIÓN"),
@@ -3032,20 +2394,12 @@ def mostrar_formulario(click_data):
             # --- Obtener lista de comerciales desde la base de datos ---
             try:
                 conn = obtener_conexion()
-                if conn is None:
-                    st.toast("❌ No se pudo conectar a PostgreSQL")
-                    comerciales = []
-                else:
-                    cursor = conn.cursor()
-                    # PostgreSQL usa %s pero esta consulta no tiene parámetros, así que está bien
-                    cursor.execute(
-                        "SELECT DISTINCT usuario FROM viabilidades WHERE usuario IS NOT NULL AND usuario != ''")
-                    comerciales = [row[0] for row in cursor.fetchall()]
-                    cursor.close()
-                    conn.close()
-                    print(f"✅ {len(comerciales)} comerciales cargados desde PostgreSQL")
+                cursor = conn.cursor()
+                cursor.execute("SELECT DISTINCT usuario FROM viabilidades WHERE usuario IS NOT NULL AND usuario != ''")
+                comerciales = [row[0] for row in cursor.fetchall()]
+                conn.close()
             except Exception as e:
-                st.toast(f"❌ Error al cargar comerciales: {e}")
+                st.toast(f"Error al cargar comerciales: {e}")
                 comerciales = []
 
             # Añadir el valor actual si no está en la lista
@@ -3295,17 +2649,16 @@ def mostrar_formulario(click_data):
                 [aid.strip() for aid in (current_data["apartment_id"] or "").split(",") if aid.strip()]
             )
 
-            # Actualización completa de la viabilidad - CAMBIO: ? → %s
+            # Actualización completa de la viabilidad
             cursor.execute("""
                 UPDATE viabilidades SET
                     latitud=%s, longitud=%s, provincia=%s, municipio=%s, poblacion=%s, vial=%s, numero=%s, letra=%s, cp=%s, comentario=%s,
                     cto_cercana=%s, olt=%s, cto_admin=%s, id_cto=%s, municipio_admin=%s, serviciable=%s, coste=%s, comentarios_comercial=%s, 
                     comentarios_internos=%s, fecha_viabilidad=%s, apartment_id=%s, nombre_cliente=%s, telefono=%s, usuario=%s, 
                     direccion_id=%s, confirmacion_rafa=%s, zona_estudio=%s, estado=%s, presupuesto_enviado=%s, nuevapromocion=%s, 
-                    resultado=%s, justificacion=%s, contratos=%s, respuesta_comercial=%s, comentarios_gestor=%s, fecha_entrega=%s, estado_obra=%s,
-                    updated_at=NOW()  # NUEVO: Agregar updated_at para PostgreSQL
+                    resultado=%s, justificacion=%s, contratos=%s, respuesta_comercial=%s, comentarios_gestor=%s, fecha_entrega=%s, estado_obra=%s
                 WHERE ticket=%s
-            """, (  # CAMBIO: Mantener la tupla con los mismos valores
+            """, (
                 current_data["latitud"],
                 current_data["longitud"],
                 current_data["provincia"],
@@ -3341,14 +2694,12 @@ def mostrar_formulario(click_data):
                 current_data["contratos"],
                 current_data["respuesta_comercial"],
                 current_data["comentarios_gestor"],
-                current_data.get("fecha_entrega", ""),
-                current_data.get("estado_obra", ""),
+                current_data.get("fecha_entrega", ""),  # 🔹 NUEVO CAMPO
+                current_data.get("estado_obra", ""),  # 🔹 NUEVO CAMPO
                 ticket
             ))
 
             conn.commit()
-            cursor.close()  # NUEVO: Cerrar cursor para PostgreSQL
-            conn.close()
 
             # ============================================
             # 3. ENVIAR NOTIFICACIÓN AL COMERCIAL ASIGNADO (SIN REGISTRO EN BD)
@@ -3358,7 +2709,7 @@ def mostrar_formulario(click_data):
                 comercial_asignado = current_data["usuario"]
 
                 if comercial_asignado and comercial_asignado.strip():
-                    # Obtener el email del comercial desde la tabla usuarios - CAMBIO: ? → %s
+                    # Obtener el email del comercial desde la tabla usuarios
                     cursor.execute("SELECT email FROM usuarios WHERE username = %s", (comercial_asignado,))
                     row = cursor.fetchone()
                     correo_comercial = row[0] if row else None
@@ -3366,7 +2717,7 @@ def mostrar_formulario(click_data):
                     if correo_comercial:
                         # Importar la función de notificaciones
                         try:
-                            # from modules.notificaciones import correo_respuesta_comercial
+                            #from modules.notificaciones import correo_respuesta_comercial
 
                             # Preparar el comentario para la notificación
                             comentario_notificacion = (
@@ -3401,8 +2752,7 @@ def mostrar_formulario(click_data):
                 st.toast(f"⚠️ Error al enviar notificación: {str(e)}")
                 # Continuar con el flujo aunque falle la notificación
 
-            # NO cerrar la conexión aquí si ya se cerró antes
-            conn.close()  # <-- Si ya se cerró en el paso 2, QUITAR esta línea
+            conn.close()
 
             # ============================================
             # 4. MENSAJE DE CONFIRMACIÓN Y LIMPIEZA
@@ -3561,54 +2911,27 @@ def eliminar_oferta_comercial(df_ofertas):
                                           width='stretch')
 
         if submitted and selected_apartment_id != "-- Seleccione --":
-            conn = None
-            cursor = None
             try:
                 conn = obtener_conexion()
-                if not conn:
-                    st.toast("❌ Error de conexión a PostgreSQL")
-                    return
-
                 cursor = conn.cursor()
 
-                # CAMBIO CRÍTICO: ? → %s para PostgreSQL
+                # Usar parámetros para prevenir SQL injection
                 cursor.execute(
                     "DELETE FROM comercial_rafa WHERE apartment_id = %s",
                     (selected_apartment_id,)
                 )
 
-                filas_eliminadas = cursor.rowcount
                 conn.commit()
+                conn.close()
 
-                if filas_eliminadas > 0:
-                    st.toast(f"✅ Oferta {selected_apartment_id} eliminada exitosamente (filas: {filas_eliminadas}).")
+                st.toast(f"✅ Oferta {selected_apartment_id} eliminada exitosamente.")
+                st.toast(f"Oferta {selected_apartment_id} eliminada", icon="✅")
 
-                    # Registrar en trazabilidad
-                    log_trazabilidad(
-                        st.session_state.get("username", "Sistema"),
-                        "Eliminar Oferta",
-                        f"Eliminó oferta con apartment_id: {selected_apartment_id}"
-                    )
+                # Forzar recarga de la página
+                st.rerun()
 
-                    # Forzar recarga de la página
-                    st.rerun()
-                else:
-                    st.toast(f"⚠️ No se encontró la oferta {selected_apartment_id}")
-
-            except psycopg2.Error as e:
-                st.toast(f"❌ Error de PostgreSQL al eliminar: {e}")
-                if conn:
-                    conn.rollback()
             except Exception as e:
                 st.toast(f"❌ Error al eliminar la oferta: {e}")
-                if conn:
-                    conn.rollback()
-            finally:
-                # Siempre cerrar recursos
-                if cursor:
-                    cursor.close()
-                if conn:
-                    conn.close()
 
 
 def descargar_imagenes_ofertas(df_ofertas):
@@ -3774,9 +3097,6 @@ def mostrar_metricas_tickets():
 
     try:
         conn = obtener_conexion()
-        if not conn:
-            st.error("❌ Error de conexión a PostgreSQL")
-            return
 
         # --- MÉTRICAS PRINCIPALES ---
         # Consultas para métricas
@@ -3788,38 +3108,41 @@ def mostrar_metricas_tickets():
 
         # Tickets por estado
         estados = pd.read_sql("""
-                SELECT estado, COUNT(*) as cantidad 
-                FROM tickets 
-                GROUP BY estado
-            """, conn)
+            SELECT estado, COUNT(*) as cantidad 
+            FROM tickets 
+            GROUP BY estado
+        """, conn)
 
         # Tickets por prioridad
         prioridades = pd.read_sql("""
-                SELECT prioridad, COUNT(*) as cantidad 
-                FROM tickets 
-                GROUP BY prioridad
-            """, conn)
+            SELECT prioridad, COUNT(*) as cantidad 
+            FROM tickets 
+            GROUP BY prioridad
+        """, conn)
 
-        # Tickets últimos 7 días - CAMBIO: PostgreSQL usa CURRENT_DATE e INTERVAL
+        # Tickets últimos 7 días
         ultimos_7d = pd.read_sql("""
-                SELECT fecha_creacion::DATE as fecha, COUNT(*) as cantidad
-                FROM tickets 
-                WHERE fecha_creacion >= CURRENT_DATE - INTERVAL '7 days'
-                GROUP BY fecha_creacion::DATE
-                ORDER BY fecha
-            """, conn)
+            SELECT DATE(fecha_creacion) as fecha, COUNT(*) as cantidad
+            FROM tickets 
+            WHERE fecha_creacion >= DATE('now', '-7 days')
+            GROUP BY DATE(fecha_creacion)
+            ORDER BY fecha
+        """, conn)
 
-        # Tiempo promedio de resolución - CAMBIO: PostgreSQL usa EXTRACT(EPOCH FROM)
+        # Tiempo promedio de resolución (tickets cerrados) - VERSIÓN SEGURA
+        # Primero verificamos si existe el campo fecha_cierre
         try:
+            # Intentamos una consulta que funcione con o sin fecha_cierre
             tiempo_resolucion = pd.read_sql("""
-                    SELECT 
-                        AVG(
-                            EXTRACT(EPOCH FROM (COALESCE(fecha_cierre, NOW()) - fecha_creacion)) / 3600
-                        ) as horas_promedio
-                    FROM tickets 
-                    WHERE estado IN ('Resuelto', 'Cancelado')
-                """, conn)
+                SELECT 
+                    AVG(
+                        (JULIANDAY(COALESCE(fecha_cierre, fecha_creacion)) - JULIANDAY(fecha_creacion)) * 24
+                    ) as horas_promedio
+                FROM tickets 
+                WHERE estado IN ('Resuelto', 'Cancelado')
+            """, conn)
         except:
+            # Si falla, creamos un DataFrame vacío
             tiempo_resolucion = pd.DataFrame(columns=['horas_promedio'])
 
         conn.close()
@@ -3901,117 +3224,122 @@ def mostrar_metricas_tickets():
             )
             st.plotly_chart(fig_tendencia, use_container_width=True)
 
-            # --- TABLAS DETALLADAS ---
-            tab_cat, tab_user, tab_time = st.tabs(["🏷️ Por Categoría", "👥 Por Usuario", "⏱️ Tiempos"])
+        # --- TABLAS DETALLADAS ---
+        tab_cat, tab_user, tab_time = st.tabs(["🏷️ Por Categoría", "👥 Por Usuario", "⏱️ Tiempos"])
 
-            with tab_cat:
-                conn = obtener_conexion()
-                por_categoria = pd.read_sql("""
-                        SELECT 
-                            categoria,
-                            COUNT(*) as total,
-                            SUM(CASE WHEN estado = 'Abierto' THEN 1 ELSE 0 END) as abiertos,
-                            SUM(CASE WHEN estado = 'En Progreso' THEN 1 ELSE 0 END) as en_progreso,
-                            SUM(CASE WHEN estado IN ('Resuelto', 'Cancelado') THEN 1 ELSE 0 END) as resueltos
-                        FROM tickets
-                        GROUP BY categoria
-                        ORDER BY total DESC
-                    """, conn)
-                conn.close()
+        with tab_cat:
+            conn = obtener_conexion()
+            por_categoria = pd.read_sql("""
+                SELECT 
+                    categoria,
+                    COUNT(*) as total,
+                    SUM(CASE WHEN estado = 'Abierto' THEN 1 ELSE 0 END) as abiertos,
+                    SUM(CASE WHEN estado = 'En Progreso' THEN 1 ELSE 0 END) as en_progreso,
+                    SUM(CASE WHEN estado IN ('Resuelto', 'Cancelado') THEN 1 ELSE 0 END) as resueltos
+                FROM tickets
+                GROUP BY categoria
+                ORDER BY total DESC
+            """, conn)
+            conn.close()
 
-                if not por_categoria.empty:
-                    st.dataframe(por_categoria, use_container_width=True)
+            if not por_categoria.empty:
+                st.dataframe(por_categoria, use_container_width=True)
 
-            with tab_user:
-                conn = obtener_conexion()
-                por_usuario = pd.read_sql("""
-                        SELECT 
-                            u.username as usuario,
-                            COUNT(DISTINCT t.ticket_id) as tickets_creados,
-                            COUNT(DISTINCT CASE WHEN t.estado = 'Abierto' THEN t.ticket_id END) as abiertos,
-                            COUNT(DISTINCT ta.ticket_id) as asignados
-                        FROM usuarios u
-                        LEFT JOIN tickets t ON u.id = t.usuario_id
-                        LEFT JOIN tickets ta ON u.id = ta.asignado_a
-                        GROUP BY u.id, u.username
-                        ORDER BY tickets_creados DESC
-                    """, conn)
-                conn.close()
+        with tab_user:
+            conn = obtener_conexion()
+            # CONSULTA CORREGIDA - usando la tabla 'usuarios' correctamente
+            por_usuario = pd.read_sql("""
+                SELECT 
+                    u.username as usuario,
+                    COUNT(DISTINCT t.ticket_id) as tickets_creados,
+                    COUNT(DISTINCT CASE WHEN t.estado = 'Abierto' THEN t.ticket_id END) as abiertos,
+                    COUNT(DISTINCT ta.ticket_id) as asignados
+                FROM usuarios u
+                LEFT JOIN tickets t ON u.id = t.usuario_id
+                LEFT JOIN tickets ta ON u.id = ta.asignado_a
+                GROUP BY u.id, u.username
+                ORDER BY tickets_creados DESC
+            """, conn)
+            conn.close()
 
-                if not por_usuario.empty:
-                    st.dataframe(por_usuario, use_container_width=True)
+            if not por_usuario.empty:
+                st.dataframe(por_usuario, use_container_width=True)
 
-            with tab_time:
-                st.info("⏱️ **Estadísticas de Tiempo**")
+        with tab_time:
+            st.info("⏱️ **Estadísticas de Tiempo**")
 
-                col_t1, col_t2, col_t3 = st.columns(3)
-                with col_t1:
-                    if not tiempo_resolucion.empty and 'horas_promedio' in tiempo_resolucion.columns:
-                        horas = tiempo_resolucion['horas_promedio'].iloc[0]
-                        if horas and not pd.isna(horas):
-                            st.metric("Tiempo Promedio Resolución", f"{horas:.1f} horas")
-                        else:
-                            st.metric("Tiempo Promedio Resolución", "Sin datos")
+            col_t1, col_t2, col_t3 = st.columns(3)
+            with col_t1:
+                # Mostrar tiempo promedio solo si hay datos
+                if not tiempo_resolucion.empty and 'horas_promedio' in tiempo_resolucion.columns:
+                    horas = tiempo_resolucion['horas_promedio'].iloc[0]
+                    if horas and not pd.isna(horas):
+                        st.metric("Tiempo Promedio Resolución", f"{horas:.1f} horas")
                     else:
-                        st.metric("Tiempo Promedio Resolución", "N/A")
+                        st.metric("Tiempo Promedio Resolución", "Sin datos")
+                else:
+                    st.metric("Tiempo Promedio Resolución", "N/A")
 
-                with col_t2:
-                    # Tickets antiguos (> 7 días) - CAMBIO: PostgreSQL usa INTERVAL
-                    conn = obtener_conexion()
-                    antiguos = pd.read_sql("""
-                            SELECT COUNT(*) as cantidad
-                            FROM tickets
-                            WHERE estado IN ('Abierto', 'En Progreso')
-                            AND fecha_creacion < CURRENT_DATE - INTERVAL '7 days'
-                        """, conn)['cantidad'].iloc[0]
-                    conn.close()
-                    st.metric("Tickets > 7 días", antiguos, delta_color="inverse")
+            with col_t2:
+                # Tickets antiguos (> 7 días)
+                conn = obtener_conexion()
+                antiguos = pd.read_sql("""
+                    SELECT COUNT(*) as cantidad
+                    FROM tickets
+                    WHERE estado IN ('Abierto', 'En Progreso')
+                    AND fecha_creacion < DATE('now', '-7 days')
+                """, conn)['cantidad'].iloc[0]
+                conn.close()
+                st.metric("Tickets > 7 días", antiguos, delta_color="inverse")
 
-                with col_t3:
-                    # Tickets sin asignar
-                    conn = obtener_conexion()
-                    sin_asignar = pd.read_sql("""
-                            SELECT COUNT(*) as cantidad
-                            FROM tickets
-                            WHERE estado = 'Abierto' 
-                            AND (asignado_a IS NULL OR asignado_a = '')
-                        """, conn)['cantidad'].iloc[0]
-                    conn.close()
-                    st.metric("Sin asignar", sin_asignar, delta_color="inverse")
+            with col_t3:
+                # Tickets sin asignar
+                conn = obtener_conexion()
+                sin_asignar = pd.read_sql("""
+                    SELECT COUNT(*) as cantidad
+                    FROM tickets
+                    WHERE estado = 'Abierto' 
+                    AND (asignado_a IS NULL OR asignado_a = '')
+                """, conn)['cantidad'].iloc[0]
+                conn.close()
+                st.metric("Sin asignar", sin_asignar, delta_color="inverse")
 
-            # --- REPORTE DESCARGABLE ---
-            if st.button("📊 Generar Reporte Completo", type="primary", use_container_width=True):
-                output = BytesIO()
-                with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-                    resumen_data = {
-                        'Métrica': ['Total Tickets', 'Abiertos', 'En Progreso', 'Resueltos', 'Tasa Resolución'],
-                        'Valor': [total, abiertos, en_progreso, resueltos, f"{tasa_resolucion:.1f}%"]
-                    }
-                    pd.DataFrame(resumen_data).to_excel(writer, sheet_name='Resumen', index=False)
+        # --- REPORTE DESCARGABLE ---
+        if st.button("📊 Generar Reporte Completo", type="primary", use_container_width=True):
+            # Crear reporte en Excel
+            output = BytesIO()
+            with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+                # Hoja 1: Resumen
+                resumen_data = {
+                    'Métrica': ['Total Tickets', 'Abiertos', 'En Progreso', 'Resueltos', 'Tasa Resolución'],
+                    'Valor': [total, abiertos, en_progreso, resueltos, f"{tasa_resolucion:.1f}%"]
+                }
+                pd.DataFrame(resumen_data).to_excel(writer, sheet_name='Resumen', index=False)
 
-                    conn = obtener_conexion()
-                    tickets_detalle = pd.read_sql("""
-                            SELECT 
-                                t.*,
-                                u.username as nombre_usuario,
-                                a.username as nombre_asignado
-                            FROM tickets t
-                            LEFT JOIN usuarios u ON t.usuario_id = u.id
-                            LEFT JOIN usuarios a ON t.asignado_a = a.id
-                            ORDER BY t.fecha_creacion DESC
-                        """, conn)
-                    conn.close()
-                    tickets_detalle.to_excel(writer, sheet_name='Tickets', index=False)
+                # Hoja 2: Tickets detallados
+                conn = obtener_conexion()
+                tickets_detalle = pd.read_sql("""
+                    SELECT 
+                        t.*,
+                        u.username as nombre_usuario,
+                        a.username as nombre_asignado
+                    FROM tickets t
+                    LEFT JOIN usuarios u ON t.usuario_id = u.id
+                    LEFT JOIN usuarios a ON t.asignado_a = a.id
+                    ORDER BY t.fecha_creacion DESC
+                """, conn)
+                conn.close()
+                tickets_detalle.to_excel(writer, sheet_name='Tickets', index=False)
 
-                output.seek(0)
+            output.seek(0)
 
-                st.download_button(
-                    label="⬇️ Descargar Reporte Completo (.xlsx)",
-                    data=output,
-                    file_name=f"reporte_tickets_{datetime.now().strftime('%Y%m%d')}.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    use_container_width=True
-                )
+            st.download_button(
+                label="⬇️ Descargar Reporte Completo (.xlsx)",
+                data=output,
+                file_name=f"reporte_tickets_{datetime.now().strftime('%Y%m%d')}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True
+            )
 
     except Exception as e:
         st.toast(f"⚠️ Error al cargar métricas: {str(e)[:200]}")
@@ -4027,7 +3355,7 @@ def mostrar_metricas_tickets():
 
 
 def actualizar_estado_ticket(ticket_id, nuevo_estado):
-    """Versión mínima con solo cambios críticos para PostgreSQL."""
+    """Actualiza el estado de un ticket y registra la acción como comentario."""
     try:
         user_id = st.session_state.get("user_id", 1)
         username = st.session_state.get("username", "Usuario")
@@ -4035,17 +3363,22 @@ def actualizar_estado_ticket(ticket_id, nuevo_estado):
         conn = obtener_conexion()
         cursor = conn.cursor()
 
-        # Obtener estado anterior - CAMBIO: ? → %s
+        # Obtener estado anterior
         cursor.execute("SELECT estado, titulo FROM tickets WHERE ticket_id = %s", (ticket_id,))
         ticket_info = cursor.fetchone()
         estado_anterior = ticket_info[0] if ticket_info else "Desconocido"
         titulo_ticket = ticket_info[1] if ticket_info else f"#{ticket_id}"
 
-        # Actualizar estado del ticket - CAMBIO: ? → %s y CURRENT_TIMESTAMP → NOW()
-        if nuevo_estado in ['Resuelto', 'Cancelado']:
+        # Verificar si existe el campo fecha_cierre
+        cursor.execute("PRAGMA table_info(tickets)")
+        columnas = cursor.fetchall()
+        tiene_fecha_cierre = any(col[1] == 'fecha_cierre' for col in columnas)
+
+        # Actualizar estado del ticket
+        if nuevo_estado in ['Resuelto', 'Cancelado'] and tiene_fecha_cierre:
             cursor.execute("""
                 UPDATE tickets 
-                SET estado = %s, fecha_cierre = NOW() 
+                SET estado = %s, fecha_cierre = CURRENT_TIMESTAMP 
                 WHERE ticket_id = %s
             """, (nuevo_estado, ticket_id))
         else:
@@ -4055,7 +3388,7 @@ def actualizar_estado_ticket(ticket_id, nuevo_estado):
                 WHERE ticket_id = %s
             """, (nuevo_estado, ticket_id))
 
-        # Registrar el cambio de estado como comentario - CAMBIO: ? → %s
+        # Registrar el cambio de estado como comentario
         cursor.execute("""
             INSERT INTO comentarios_tickets 
             (ticket_id, usuario_id, tipo, contenido)
@@ -4068,7 +3401,6 @@ def actualizar_estado_ticket(ticket_id, nuevo_estado):
         ))
 
         conn.commit()
-        cursor.close()
         conn.close()
 
         # Registrar en trazabilidad
@@ -4249,7 +3581,7 @@ def generar_reporte_actividad(user_id):
                         COUNT(*) as cantidad
                     FROM tickets
                     WHERE usuario_id = %s 
-                        AND fecha_creacion >= CURRENT_DATE - INTERVAL '30 days'
+                        AND fecha_creacion >= DATE('now', '-30 days')
                     GROUP BY DATE(fecha_creacion)
                     ORDER BY fecha
                 """, conn, params=(user_id,))
@@ -4905,7 +4237,8 @@ def mostrar_tickets_abiertos():
                                         notificar_actualizacion_ticket(ticket_data[4], ticket_info)
 
                                     # Notificar al asignado (si existe y no es el mismo que comenta)
-                                    if ticket_data[5] and ticket_data[7] != usuario:  # asignado existe y no es usuario actual
+                                    if ticket_data[5] and ticket_data[
+                                        7] != usuario:  # asignado existe y no es usuario actual
                                         notificar_actualizacion_ticket(ticket_data[5], ticket_info)
 
                                     st.toast(f"📧 Notificaciones enviadas a los involucrados")
@@ -5037,10 +4370,10 @@ def mostrar_tickets_abiertos():
 
                         # Añadir comentario sobre la asignación
                         cursor.execute("""
-                            UPDATE tickets 
-                            SET comentarios = COALESCE(comentarios || '\n\n', '') || %s
-                            WHERE ticket_id = %s
-                        """, (
+                                        UPDATE tickets 
+                                        SET comentarios = COALESCE(comentarios || '\n\n', '') || %s
+                                        WHERE ticket_id = %s
+                                    """, (
                             f"[{datetime.now().strftime('%Y-%m-%d %H:%M')}] {st.session_state['username']} asignó el ticket a {agente_seleccionado}.",
                             ticket_id
                         ))
@@ -5526,6 +4859,14 @@ def mostrar_todos_tickets():
         3. Comprueba que la tabla 'usuarios' existe y tiene los campos 'id' y 'username'
         """)
 
+    except Exception as e:
+        st.toast(f"⚠️ Error al cargar tickets: {str(e)[:200]}")
+        st.info("""
+        **Solución:** 
+        1. Verifica que la tabla 'tickets' existe en la base de datos
+        2. Asegúrate de que la función 'obtener_conexion()' funciona correctamente
+        """)
+
 def mostrar_mis_tickets():
     """Muestra los tickets del usuario actual."""
 
@@ -5705,10 +5046,10 @@ def crear_nuevo_ticket_form(user_id):
             "📄 **Descripción detallada** *",
             placeholder="""Describe el problema o solicitud con el mayor detalle posible:
 
-• ¿Qué pasó exactamente?
-• ¿Cuándo ocurrió? (Fecha y hora aproximada)
-• ¿Qué esperabas que sucediera?
-• ¿Qué pasó en su lugar?
+• ¿Qué pasó exactamente%s
+• ¿Cuándo ocurrió%s (Fecha y hora aproximada)
+• ¿Qué esperabas que sucediera%s
+• ¿Qué pasó en su lugar%s
 • Pasos para reproducir el problema (si aplica):
   1. 
   2. 
@@ -5757,7 +5098,6 @@ Información adicional (sistema operativo, navegador, versión de la app, etc.):
                             INSERT INTO tickets 
                             (usuario_id, categoria, prioridad, estado, asignado_a, titulo, descripcion)
                             VALUES (%s, %s, %s, %s, %s, %s, %s)
-                            RETURNING ticket_id
                         """, (
                             user_id,
                             categoria,
@@ -5773,7 +5113,6 @@ Información adicional (sistema operativo, navegador, versión de la app, etc.):
                             INSERT INTO tickets 
                             (usuario_id, categoria, prioridad, estado, titulo, descripcion)
                             VALUES (%s, %s, %s, %s, %s, %s)
-                            RETURNING ticket_id
                         """, (
                             user_id,
                             categoria,
@@ -5783,9 +5122,8 @@ Información adicional (sistema operativo, navegador, versión de la app, etc.):
                             descripcion
                         ))
 
-                    # Obtener el ID del ticket creado
-                    ticket_id = cursor.fetchone()[0]
                     conn.commit()
+                    ticket_id = cursor.lastrowid
 
                     # Si se asignó, actualizar para registrar quién asignó
                     if asignado_id:
@@ -5837,22 +5175,22 @@ Información adicional (sistema operativo, navegador, versión de la app, etc.):
                     with st.expander("🔍 Ver detalles del error"):
                         st.code(error_msg, language='python')
 
-                        if "no such table" in error_msg.lower() or "relation" in error_msg.lower():
-                            st.error("""
-                            **ERROR: La tabla 'tickets' no existe.**
+                        if "no such table" in error_msg.lower():
+                            st.toast("""
+                            **ERROR CRÍTICO: La tabla 'tickets' no existe.**
 
-                            **Solución para PostgreSQL:**
+                            **Solución:**
                             1. Ejecuta este SQL en tu base de datos:
                             ```sql
                             CREATE TABLE IF NOT EXISTS tickets (
-                                ticket_id SERIAL PRIMARY KEY,
-                                fecha_creacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                                ticket_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                                fecha_creacion DATETIME DEFAULT CURRENT_TIMESTAMP,
                                 usuario_id INTEGER NOT NULL,
-                                categoria VARCHAR(100) NOT NULL,
-                                prioridad VARCHAR(20) CHECK(prioridad IN ('Alta', 'Media', 'Baja')) DEFAULT 'Media',
-                                estado VARCHAR(20) CHECK(estado IN ('Abierto', 'En Progreso', 'Resuelto', 'Cancelado')) DEFAULT 'Abierto',
+                                categoria TEXT NOT NULL,
+                                prioridad TEXT CHECK(prioridad IN ('Alta', 'Media', 'Baja')) DEFAULT 'Media',
+                                estado TEXT CHECK(estado IN ('Abierto', 'En Progreso', 'Resuelto', 'Cancelado')) DEFAULT 'Abierto',
                                 asignado_a INTEGER,
-                                titulo VARCHAR(255) NOT NULL,
+                                titulo TEXT NOT NULL,
                                 descripcion TEXT NOT NULL,
                                 comentarios TEXT,
                                 FOREIGN KEY (usuario_id) REFERENCES usuarios(id),
@@ -5860,7 +5198,7 @@ Información adicional (sistema operativo, navegador, versión de la app, etc.):
                             );
                             ```
 
-                            2. Asegúrate de que la tabla 'usuarios' exista antes.
+                            2. O usa el botón de creación de tabla en la sección de administración.
                             """)
 
 
@@ -6131,7 +5469,7 @@ def admin_dashboard():
                         normalizar_apartment_id)
                     df_contratos["fuente"] = "Contrato"
 
-                    df_tirc = pd.read_sql('SELECT * FROM "TIRC"', conn)
+                    df_tirc = pd.read_sql("SELECT * FROM TIRC", conn)
                     df_tirc["apartment_id_normalizado"] = df_tirc["apartment_id"].apply(normalizar_apartment_id)
                     df_tirc["fuente"] = "TIRC"
 
@@ -6826,7 +6164,7 @@ def admin_dashboard():
 
                                     while not token_valido and intentos < max_intentos:
                                         token = st.secrets.token_urlsafe(16)
-                                        cursor.execute("SELECT id FROM precontrato_links WHERE token = ?", (token,))
+                                        cursor.execute("SELECT id FROM precontrato_links WHERE token = %s", (token,))
                                         if cursor.fetchone() is None:
                                             token_valido = True
                                         intentos += 1
@@ -6838,12 +6176,12 @@ def admin_dashboard():
                                         cursor.execute("""
                                                         UPDATE precontrato_links 
                                                         SET token = %s, expiracion = %s, usado = 0
-                                                        WHERE precontrato_id = ?
+                                                        WHERE precontrato_id = %s
                                                     """, (token, expiracion, precontrato[0]))
                                         conn.commit()
                                         conn.close()
                                         base_url = "https://one7022025.onrender.com"
-                                        link_cliente = f"{base_url}?precontrato_id={precontrato[0]}&token={urllib.parse.quote(token)}"
+                                        link_cliente = f"{base_url}%sprecontrato_id={precontrato[0]}&token={urllib.parse.quote(token)}"
                                         st.toast("✅ Nuevo enlace generado correctamente.")
                                         st.code(link_cliente, language="text")
                                         st.info("💡 Copia este nuevo enlace y envíalo al cliente.")
@@ -6861,8 +6199,8 @@ def admin_dashboard():
             # --- 1️⃣ Leer datos de la base de datos ---
             try:
                 conn = obtener_conexion()
-                df_tirc = pd.read_sql('SELECT * FROM "TIRC"', conn)
-                df_viabilidades = pd.read_sql('SELECT * FROM "viabilidades"', conn)
+                df_tirc = pd.read_sql("SELECT * FROM TIRC", conn)
+                df_viabilidades = pd.read_sql("SELECT * FROM viabilidades", conn)
                 conn.close()
             except Exception as e:
                 st.toast(f"❌ Error al cargar datos: {e}")
@@ -7395,7 +6733,7 @@ def admin_dashboard():
 
                             insert_query = f"""
                                 INSERT INTO TIRC ({', '.join([f'"{c}"' for c in columnas_tirc])})
-                                VALUES ({', '.join(['?'] * len(columnas_tirc))})
+                                VALUES ({', '.join(['%s'] * len(columnas_tirc))})
                                 ON CONFLICT(id) DO UPDATE SET
                                 {', '.join([f'"{c}"=excluded."{c}"' for c in columnas_tirc if c != "id"])}
                             """
@@ -7647,7 +6985,7 @@ def admin_dashboard():
                                     parcela_catastral, letra, cp, site_operational_state, apartment_operational_state,
                                     cto_id, olt, cto, latitud, longitud, tipo_olt_rental, CERTIFICABLE, comercial,
                                     zona, fecha, serviciable, motivo, contrato_uis
-                                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                             """
 
                             progress_bar = st.progress(0)
@@ -7675,7 +7013,7 @@ def admin_dashboard():
                                 cursor.execute("""
                                     SELECT apartment_id
                                     FROM comercial_rafa
-                                    WHERE provincia = ? AND municipio = ? AND poblacion = ? AND comercial = ?
+                                    WHERE provincia = %s AND municipio = %s AND poblacion = %s AND comercial = %s
                                 """, (provincia, municipio, poblacion, comercial))
                                 asignados_ids = {fila[0] for fila in cursor.fetchall()}
 
@@ -7683,7 +7021,7 @@ def admin_dashboard():
                                 cursor.execute("""
                                     SELECT apartment_id, provincia, municipio, poblacion, vial, numero, letra, cp, latitud, longitud
                                     FROM datos_uis
-                                    WHERE provincia = ? AND municipio = ? AND poblacion = ?
+                                    WHERE provincia = %s AND municipio = %s AND poblacion = %s
                                 """, (provincia, municipio, poblacion))
                                 puntos_zona = cursor.fetchall()
 
@@ -7699,7 +7037,7 @@ def admin_dashboard():
                                     cursor.execute("""
                                         INSERT INTO comercial_rafa
                                         (apartment_id, provincia, municipio, poblacion, vial, numero, letra, cp, latitud, longitud, comercial, Contrato)
-                                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                                     """, (p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7], p[8], p[9], comercial,
                                           'Pendiente'))
 
@@ -7709,7 +7047,7 @@ def admin_dashboard():
                                     )
 
                                     # 🔹 Notificación al comercial
-                                    cursor.execute("SELECT email FROM usuarios WHERE LOWER(username) = ?",
+                                    cursor.execute("SELECT email FROM usuarios WHERE LOWER(username) = %s",
                                                    (comercial.lower(),))
                                     resultado = cursor.fetchone()
                                     if resultado:
@@ -7774,7 +7112,7 @@ def admin_dashboard():
                                 poblaciones_nuevas = row["poblaciones_nuevas"]
 
                                 comercial_normalizado = comercial.lower()
-                                cursor.execute("SELECT email FROM usuarios WHERE LOWER(username) = ?",
+                                cursor.execute("SELECT email FROM usuarios WHERE LOWER(username) = %s",
                                                (comercial_normalizado,))
                                 resultado = cursor.fetchone()
 
@@ -7885,13 +7223,13 @@ def admin_dashboard():
 
         # Crear tabla si no existe (sin columna autor)
         cursor.execute("""
-            CREATE TABLE IF NOT EXISTS anuncios (
-                id SERIAL PRIMARY KEY,
-                titulo TEXT NOT NULL,
-                descripcion TEXT NOT NULL,
-                fecha TEXT NOT NULL
-            )
-        """)
+                CREATE TABLE IF NOT EXISTS anuncios (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    titulo TEXT NOT NULL,
+                    descripcion TEXT NOT NULL,
+                    fecha TEXT NOT NULL
+                )
+            """)
         conn.commit()
 
         # Obtener rol del usuario actual
@@ -7976,14 +7314,8 @@ def mostrar_kpis_seguimiento_contratos():
             cursor = conn.cursor()
 
             # Verificar que la tabla existe
-            cursor.execute("""
-                SELECT EXISTS (
-                    SELECT FROM information_schema.tables 
-                    WHERE table_schema = 'public' 
-                    AND table_name = 'seguimiento_contratos'
-                );
-            """)
-            if not cursor.fetchone()[0]:
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='seguimiento_contratos'")
+            if not cursor.fetchone():
                 st.warning("⚠️ La tabla 'seguimiento_contratos' no existe en la base de datos")
                 conn.close()
                 return
@@ -7995,7 +7327,7 @@ def mostrar_kpis_seguimiento_contratos():
                 fecha_inicio_contrato, fecha_ingreso, comercial,
                 fecha_instalacion, apartment_id, fecha_estado,
                 fecha_fin_contrato, comentarios, divisor, puerto,
-                "SAT", "Tipo_cliente", tecnico, metodo_entrada, billing
+                SAT, Tipo_cliente, tecnico, metodo_entrada, billing
             FROM seguimiento_contratos
             """
 
@@ -9189,13 +8521,6 @@ def mostrar_kpis_seguimiento_contratos():
                 st.code(traceback.format_exc())
 ########################
 
-def proteger_identificador(nombre):
-    """Envuelve en comillas dobles los identificadores con mayúsculas para PostgreSQL"""
-    if any(c.isupper() for c in nombre):
-        return f'"{nombre}"'
-    return nombre
-
-
 def mostrar_certificacion():
     """Muestra el panel de certificación con análisis de ofertas y observaciones"""
     st.info("📋 **Certificación de Ofertas** - Análisis completo de visitas comerciales y estado de CTOs")
@@ -9208,78 +8533,59 @@ def mostrar_certificacion():
                 st.toast("❌ No se pudo conectar a la base de datos")
                 return
 
-            # Obtener las columnas disponibles de comercial_rafa
+            # Primero, obtener las columnas disponibles de comercial_rafa
             cursor = conn.cursor()
-            cursor.execute("""
-                SELECT column_name 
-                FROM information_schema.columns 
-                WHERE table_schema = 'public' 
-                  AND table_name = 'comercial_rafa'
-                ORDER BY ordinal_position;
-            """)
-            columnas_comercial_rafa = [row[0] for row in cursor.fetchall()]
+
+            # Método 1: Usar PRAGMA para SQLite
+            cursor.execute("PRAGMA table_info(comercial_rafa)")
+            columnas_comercial_rafa = [row[1] for row in cursor.fetchall()]
+
+            # Método alternativo: Usar consulta SELECT con LIMIT 0
+            # cursor.execute("SELECT * FROM comercial_rafa LIMIT 0")
+            # columnas_comercial_rafa = [desc[0] for desc in cursor.description]
 
             st.toast(f"📊 Columnas en comercial_rafa: {len(columnas_comercial_rafa)} encontradas")
 
-            # --- PASO 1: Crear mapeo completo de columnas (minúsculas -> nombre protegido) ---
-            mapeo_columnas = {}
-            for col_real in columnas_comercial_rafa:
-                # Proteger columnas con mayúsculas
-                if any(c.isupper() for c in col_real):
-                    mapeo_columnas[col_real.lower()] = f'"{col_real}"'
-                else:
-                    mapeo_columnas[col_real.lower()] = col_real
-
-            # --- PASO 2: Construir SELECT con columnas protegidas ---
-            columnas_base_minusculas = [
+            # Verificar columnas específicas
+            columnas_a_incluir = []
+            columnas_base = [
                 'apartment_id', 'comercial', 'serviciable', 'incidencia',
-                'tipo_vivienda', 'observaciones', 'contrato', 'fichero_imagen'
+                'Tipo_Vivienda', 'observaciones', 'contrato', 'fichero_imagen'
             ]
 
-            columnas_seleccionadas = []
-            columnas_no_encontradas = []
+            # Buscar variaciones de fecha
+            posibles_nombres_fecha = ['fecha_visita', 'fecha', 'fecha_visita_comercial',
+                                      'visita_fecha', 'fecha_visita_1', 'fecha_visita_2']
 
-            for col_minuscula in columnas_base_minusculas:
-                if col_minuscula in mapeo_columnas:
-                    nombre_protegido = mapeo_columnas[col_minuscula]
-                    columnas_seleccionadas.append(f"cr.{nombre_protegido}")
-                else:
-                    columnas_no_encontradas.append(col_minuscula)
-                    st.toast(f"⚠️ Columna '{col_minuscula}' no encontrada")
-
-            # Buscar columna de fecha
-            posibles_fechas_minusculas = ['fecha_visita', 'fecha', 'fecha_visita_comercial',
-                                          'visita_fecha', 'fecha_visita_1', 'fecha_visita_2']
-
-            fecha_protegida = None
-            for fecha_minuscula in posibles_fechas_minusculas:
-                if fecha_minuscula in mapeo_columnas:
-                    fecha_protegida = mapeo_columnas[fecha_minuscula]
-                    st.toast(f"✅ Columna de fecha encontrada: {fecha_protegida}")
+            nombre_fecha = None
+            for nombre in posibles_nombres_fecha:
+                if nombre in columnas_comercial_rafa:
+                    nombre_fecha = nombre
+                    st.toast(f"✅ Columna de fecha encontrada: {nombre_fecha}")
                     break
 
-            if fecha_protegida:
-                columnas_seleccionadas.append(f"cr.{fecha_protegida}")
+            # Construir consulta dinámicamente
+            columnas_seleccionadas = []
+
+            # Columnas de comercial_rafa
+            for col in columnas_base:
+                if col in columnas_comercial_rafa:
+                    columnas_seleccionadas.append(f"cr.{col}")
+                else:
+                    st.toast(f"⚠️ Columna '{col}' no encontrada en comercial_rafa")
+
+            # Añadir columna de fecha si existe
+            if nombre_fecha:
+                columnas_seleccionadas.append(f"cr.{nombre_fecha}")
 
             # Si no hay suficientes columnas, usar todas
             if len(columnas_seleccionadas) < 5:
                 st.warning("⚠️ Pocas columnas encontradas, usando SELECT *")
-                columnas_str = "cr.*"
-            else:
-                columnas_str = ", ".join(columnas_seleccionadas)
+                columnas_seleccionadas = ["cr.*"]
 
-            # --- PASO 3: Obtener nombres protegidos para WHERE ---
-            # Importante: usar minúsculas para buscar en el mapeo
-            contrato_protegido = mapeo_columnas.get('contrato', 'contrato')
-            serviciable_protegido = mapeo_columnas.get('serviciable', 'serviciable')
+            # Consulta dinámica
+            columnas_str = ", ".join(columnas_seleccionadas)
 
-            # Verificar que las columnas del WHERE existen
-            if 'contrato' not in mapeo_columnas:
-                st.warning(f"⚠️ Columna 'contrato' no encontrada. Usando '{contrato_protegido}'")
-            if 'serviciable' not in mapeo_columnas:
-                st.warning(f"⚠️ Columna 'serviciable' no encontrada. Usando '{serviciable_protegido}'")
-
-            # --- PASO 4: Construir consulta FINAL con TODO protegido ---
             query_ofertas = f"""
             SELECT 
                 {columnas_str},
@@ -9292,14 +8598,11 @@ def mostrar_certificacion():
                 du.numero AS numero_du
             FROM comercial_rafa cr
             LEFT JOIN datos_uis du ON cr.apartment_id = du.apartment_id
-            WHERE (cr.{contrato_protegido} IS NULL OR LOWER(TRIM(COALESCE(cr.{contrato_protegido}, ''))) != 'pendiente')
-            AND cr.{serviciable_protegido} IS NOT NULL
+            WHERE (cr.contrato IS NULL OR LOWER(TRIM(COALESCE(cr.contrato, ''))) != 'pendiente')
+            AND cr.serviciable IS NOT NULL
             """
 
-            # Mostrar consulta para depuración (opcional)
-            # st.code(query_ofertas)
-
-            # --- PASO 5: Ejecutar consulta ---
+            # Mostrar consulta para depuración
             df_ofertas = pd.read_sql(query_ofertas, conn)
 
             if df_ofertas.empty:
@@ -9307,16 +8610,13 @@ def mostrar_certificacion():
                 conn.close()
                 return
 
-            # --- PASO 6: Segunda consulta (también necesita protección) ---
-            # Obtener nombre protegido de observaciones
-            observaciones_protegido = mapeo_columnas.get('observaciones', 'observaciones')
-
-            query_ctos = f"""
+            # Paso 2: Calcular estadísticas por CTO
+            query_ctos = """
             WITH visitas_realizadas AS (
                 SELECT DISTINCT apartment_id 
                 FROM comercial_rafa 
-                WHERE {observaciones_protegido} IS NOT NULL 
-                AND TRIM(COALESCE({observaciones_protegido}, '')) != ''
+                WHERE observaciones IS NOT NULL 
+                AND TRIM(COALESCE(observaciones, '')) != ''
             )
             SELECT
                 du.cto,
@@ -9335,12 +8635,11 @@ def mostrar_certificacion():
                 st.warning("⚠️ No se encontraron datos de CTOs.")
                 return
 
-            # --- PASO 7: Procesar resultados ---
+            # Calcular porcentaje
             df_ctos['porcentaje_visitado'] = (
-                    df_ctos['viviendas_visitadas'] / df_ctos['total_viviendas_cto'] * 100
-            ).round(2)
+                        df_ctos['viviendas_visitadas'] / df_ctos['total_viviendas_cto'] * 100).round(2)
 
-            # Unir datos
+            # Paso 3: Unir datos
             if 'cto' in df_ofertas.columns:
                 df_final = pd.merge(
                     df_ofertas,
@@ -9350,6 +8649,7 @@ def mostrar_certificacion():
                     suffixes=('', '_cto_stats')
                 )
             else:
+                # Si no hay columna cto, no podemos hacer merge
                 st.toast("❌ No se encontró la columna 'cto' para unir estadísticas")
                 df_final = df_ofertas.copy()
                 df_final['total_viviendas_cto'] = None
@@ -9372,16 +8672,12 @@ def mostrar_certificacion():
             if rename_map:
                 df_final = df_final.rename(columns=rename_map)
 
-            # Mostrar resultados
-            if 'clasificar_observaciones' in globals():
-                df_final = clasificar_observaciones(df_final)
+            # Mostrar información sobre el DataFrame
+            # Clasificar observaciones
+            df_final = clasificar_observaciones(df_final)
 
-            if 'mostrar_resultados_certificacion' in globals():
-                mostrar_resultados_certificacion(df_final)
-            else:
-                # Mostrar vista básica si no existe la función
-                st.subheader("📊 Resultados de Certificación")
-                st.dataframe(df_final.head(20))
+            # Mostrar resultados
+            mostrar_resultados_certificacion(df_final)
 
         except Exception as e:
             st.toast(f"❌ Error en el proceso de certificación: {str(e)}")
@@ -9640,40 +8936,29 @@ def mostrar_resultados_certificacion(df):
                 width='stretch'
             )
 
-
 def generar_informe(fecha_inicio, fecha_fin):
     # Conectar a la base de datos y realizar cada consulta
     def ejecutar_consulta(query, params=None):
         # Abrir la conexión para cada consulta
         conn = obtener_conexion()
-        if conn is None:
-            return 0
         cursor = conn.cursor()
-        try:
-            cursor.execute(query, params if params else ())
-            result = cursor.fetchone()
-            # Verificar si result es None o vacío
-            if result is None or len(result) == 0:
-                return 0
-            return result[0] if result[0] is not None else 0
-        except Exception as e:
-            print(f"Error en consulta: {e}")
-            return 0
-        finally:
-            conn.close()
+        cursor.execute(query, params if params else ())
+        result = cursor.fetchone()
+        conn.close()  # Cerrar la conexión inmediatamente después de ejecutar la consulta
+        return result[0] if result else 0
 
     # 🔹 1️⃣ Total de asignaciones en el periodo T
     query_total = """
         SELECT COUNT(DISTINCT apartment_id) 
-        FROM "datos_UIs"
-        WHERE DATE(fecha) BETWEEN %s AND %s
+        FROM datos_uis
+        WHERE STRFTIME('%Y-%m-%d', fecha) BETWEEN %s AND %s
     """
     total_asignaciones = ejecutar_consulta(query_total, (fecha_inicio, fecha_fin))
 
     # 🔹 2️⃣ Cantidad de visitas (apartment_id presente en ambas tablas, sin filtrar por fecha)
     query_visitados = """
         SELECT COUNT(DISTINCT d.apartment_id)
-        FROM "datos_UIs" d
+        FROM datos_uis d
         INNER JOIN comercial_rafa o 
             ON d.apartment_id = o.apartment_id
     """
@@ -9682,17 +8967,17 @@ def generar_informe(fecha_inicio, fecha_fin):
     # 🔹 3️⃣ Cantidad de ventas (visitados donde contrato = 'Sí')
     query_ventas = """
         SELECT COUNT(DISTINCT d.apartment_id)
-        FROM "datos_UIs" d
+        FROM datos_uis d
         INNER JOIN comercial_rafa o 
             ON d.apartment_id = o.apartment_id
-        WHERE LOWER(o."Contrato") = 'sí'
+        WHERE LOWER(o.contrato) = 'sí'
     """
     total_ventas = ejecutar_consulta(query_ventas)
 
     # 🔹 4️⃣ Cantidad de incidencias (donde incidencia = 'Sí')
     query_incidencias = """
         SELECT COUNT(DISTINCT d.apartment_id)
-        FROM "datos_UIs" d
+        FROM datos_uis d
         INNER JOIN comercial_rafa o 
             ON d.apartment_id = o.apartment_id
         WHERE LOWER(o.incidencia) = 'sí'
@@ -9720,12 +9005,11 @@ def generar_informe(fecha_inicio, fecha_fin):
         'Ventas': [total_ventas],
         'Incidencias': [total_incidencias],
         'Viviendas No Serviciables': [total_no_serviciables],
-        '% Ventas': [round(porcentaje_ventas, 2)],
-        '% Visitas': [round(porcentaje_visitas, 2)],
-        '% Incidencias': [round(porcentaje_incidencias, 2)],
-        '% Viviendas No Serviciables': [round(porcentaje_no_serviciables, 2)]
+        '% Ventas': [porcentaje_ventas],
+        '% Visitas': [porcentaje_visitas],
+        '% Incidencias': [porcentaje_incidencias],
+        '% Viviendas No Serviciables': [porcentaje_no_serviciables]
     })
-
     st.write("----------------------")
     # Crear tres columnas para los gráficos
     col1, col2, col3 = st.columns(3)
@@ -9755,7 +9039,7 @@ def generar_informe(fecha_inicio, fecha_fin):
         fig_serviciables = go.Figure(data=[go.Bar(
             x=labels_serviciables,
             y=values_serviciables,
-            text=[f"{v:.1f}%" for v in values_serviciables],
+            text=values_serviciables,
             textposition='outside',
             marker=dict(color=['#ff6666', '#99cc99'])
         )])
@@ -9785,37 +9069,37 @@ def generar_informe(fecha_inicio, fecha_fin):
     # 🔹 VIABILIDADES: Cálculo y resumen textual
     conn = obtener_conexion()
     query_viabilidades = """
-        SELECT 
-            CASE 
-                WHEN LOWER(serviciable) = 'sí' THEN 'sí'
-                WHEN LOWER(serviciable) = 'no' THEN 'no'
-                ELSE 'desconocido'
-            END AS serviciable,
-            COUNT(*) as total
-        FROM viabilidades
-        WHERE DATE(fecha_viabilidad) BETWEEN %s AND %s
-        GROUP BY serviciable
-    """
+           SELECT 
+               CASE 
+                   WHEN LOWER(serviciable) = 'sí' THEN 'sí'
+                   WHEN LOWER(serviciable) = 'no' THEN 'no'
+                   ELSE 'desconocido'
+               END AS serviciable,
+               COUNT(*) as total
+           FROM viabilidades
+           WHERE STRFTIME('%Y-%m-%d', fecha_viabilidad) BETWEEN %s AND %s
+           GROUP BY serviciable
+       """
     df_viabilidades = pd.read_sql_query(query_viabilidades, conn, params=(fecha_inicio, fecha_fin))
     conn.close()
 
     total_viabilidades = df_viabilidades['total'].sum()
     total_serviciables = df_viabilidades[df_viabilidades['serviciable'] == 'sí']['total'].sum() if 'sí' in \
-                                                                                                   df_viabilidades[
-                                                                                                       'serviciable'].values else 0
+                                                                                                          df_viabilidades[
+                                                                                                              'serviciable'].values else 0
     total_no_serviciables_v = df_viabilidades[df_viabilidades['serviciable'] == 'no']['total'].sum() if 'no' in \
-                                                                                                        df_viabilidades[
-                                                                                                            'serviciable'].values else 0
+                                                                                                               df_viabilidades[
+                                                                                                                   'serviciable'].values else 0
 
     porcentaje_viables = (total_serviciables / total_viabilidades * 100) if total_viabilidades > 0 else 0
     porcentaje_no_viables = (total_no_serviciables_v / total_viabilidades * 100) if total_viabilidades > 0 else 0
 
     resumen_viabilidades = f"""
-    <div style="text-align: justify;">
-    Además, durante el mismo periodo se registraron <strong>{total_viabilidades}</strong> viabilidades realizadas. De estas, <strong>{total_serviciables}</strong> fueron consideradas <strong>serviciables</strong> (<strong>{porcentaje_viables:.2f}%</strong>) y <strong>{total_no_serviciables_v}</strong> fueron <strong>no serviciables</strong> (<strong>{porcentaje_no_viables:.2f}%</strong>). Las restantes, son viabilidades aun en estudio.
-    </div>
-    <br>
-    """
+       <div style="text-align: justify;">
+       Además, durante el mismo periodo se registraron <strong>{total_viabilidades}</strong> viabilidades realizadas. De estas, <strong>{total_serviciables}</strong> fueron consideradas <strong>serviciables</strong> (<strong>{porcentaje_viables:.2f}%</strong>) y <strong>{total_no_serviciables_v}</strong> fueron <strong>no serviciables</strong> (<strong>{porcentaje_no_viables:.2f}%</strong>). Las restantes, son viabilidades aun en estudio.
+       </div>
+       <br>
+       """
 
     st.markdown(resumen_viabilidades, unsafe_allow_html=True)
 
@@ -9827,13 +9111,13 @@ def generar_informe(fecha_inicio, fecha_fin):
         SELECT COUNT(*) 
         FROM trazabilidad
         WHERE LOWER(accion) LIKE '%asignación%' 
-          AND DATE(fecha) BETWEEN %s AND %s
+          AND STRFTIME('%Y-%m-%d', fecha) BETWEEN %s AND %s
     """
     query_desasignaciones = """
         SELECT COUNT(*) 
         FROM trazabilidad
         WHERE LOWER(accion) LIKE '%desasignación%' 
-          AND DATE(fecha) BETWEEN %s AND %s
+          AND STRFTIME('%Y-%m-%d', fecha) BETWEEN %s AND %s
     """
     total_asignaciones_trazabilidad = ejecutar_consulta(query_asignaciones_trazabilidad, (fecha_inicio, fecha_fin))
     total_desasignaciones = ejecutar_consulta(query_desasignaciones, (fecha_inicio, fecha_fin))
@@ -9847,8 +9131,8 @@ def generar_informe(fecha_inicio, fecha_fin):
         'Asignaciones Gestor': [total_asignaciones_trazabilidad],
         'Desasignaciones Gestor': [total_desasignaciones],
         'Total Movimientos': [total_movimientos],
-        '% Asignaciones': [round(porcentaje_asignaciones, 2)],
-        '% Desasignaciones': [round(porcentaje_desasignaciones, 2)]
+        '% Asignaciones': [porcentaje_asignaciones],
+        '% Desasignaciones': [porcentaje_desasignaciones]
     })
 
     col_t1, col_t2 = st.columns(2)
@@ -9926,51 +9210,44 @@ def generar_informe(fecha_inicio, fecha_fin):
                 WHEN LOWER(serviciable) = 'sí' THEN 'Sí'
                 WHEN LOWER(serviciable) = 'no' THEN 'No'
                 ELSE 'Desconocido'
-            END AS serviciable,
-            COUNT(*) AS total_count
+            END AS Serviciable,
+            COUNT(*) AS Total
         FROM viabilidades
-        WHERE DATE(fecha_viabilidad) BETWEEN %s AND %s
-        GROUP BY 
-            CASE 
-                WHEN LOWER(serviciable) = 'sí' THEN 'Sí'
-                WHEN LOWER(serviciable) = 'no' THEN 'No'
-                ELSE 'Desconocido'
-            END
+        WHERE STRFTIME('%Y-%m-%d', fecha_viabilidad) BETWEEN %s AND %s
+        GROUP BY Serviciable
     """
     df_serviciable = pd.read_sql_query(query_serviciable, conn, params=(fecha_inicio, fecha_fin))
-    total_viabilidades = df_serviciable[
-        "total_count"].sum() if not df_serviciable.empty and "total_count" in df_serviciable.columns else 0
+    total_viabilidades = df_serviciable["Total"].sum() if not df_serviciable.empty else 0
 
     # 2️⃣ Estado (fase administrativa)
     query_estado = """
         SELECT 
-            COALESCE(estado, 'Sin estado') AS estado,
-            COUNT(*) AS total_count
+            COALESCE(estado, 'Sin estado') AS Estado,
+            COUNT(*) AS Total
         FROM viabilidades
-        WHERE DATE(fecha_viabilidad) BETWEEN %s AND %s
-        GROUP BY COALESCE(estado, 'Sin estado')
-        ORDER BY total_count DESC
+        WHERE STRFTIME('%Y-%m-%d', fecha_viabilidad) BETWEEN %s AND %s
+        GROUP BY Estado
+        ORDER BY Total DESC
     """
     df_estado = pd.read_sql_query(query_estado, conn, params=(fecha_inicio, fecha_fin))
 
     # 3️⃣ Resultado (dictamen final)
     query_resultado = """
         SELECT 
-            COALESCE(resultado, 'Sin resultado') AS resultado,
-            COUNT(*) AS total_count
+            COALESCE(resultado, 'Sin resultado') AS Resultado,
+            COUNT(*) AS Total
         FROM viabilidades
-        WHERE DATE(fecha_viabilidad) BETWEEN %s AND %s
-        GROUP BY COALESCE(resultado, 'Sin resultado')
-        ORDER BY total_count DESC
+        WHERE STRFTIME('%Y-%m-%d', fecha_viabilidad) BETWEEN %s AND %s
+        GROUP BY Resultado
+        ORDER BY Total DESC
     """
     df_resultado = pd.read_sql_query(query_resultado, conn, params=(fecha_inicio, fecha_fin))
 
     # 4️⃣ Viabilidades con comentarios del gestor
     query_comentarios = """
-        SELECT COUNT(*) as total_count FROM viabilidades 
-        WHERE comentarios_gestor IS NOT NULL 
-          AND TRIM(comentarios_gestor) <> ''
-          AND DATE(fecha_viabilidad) BETWEEN %s AND %s
+        SELECT COUNT(*) FROM viabilidades 
+        WHERE comentarios_gestor IS NOT NULL AND TRIM(comentarios_gestor) <> ''
+          AND STRFTIME('%Y-%m-%d', fecha_viabilidad) BETWEEN %s AND %s
     """
     total_comentarios = ejecutar_consulta(query_comentarios, (fecha_inicio, fecha_fin))
     porcentaje_comentarios = (total_comentarios / total_viabilidades * 100) if total_viabilidades > 0 else 0
@@ -9982,55 +9259,52 @@ def generar_informe(fecha_inicio, fecha_fin):
     # ──────────────────────────────
     colv1, colv2 = st.columns(2)
     with colv1:
-        if not df_serviciable.empty and "total_count" in df_serviciable.columns:
-            fig_s = go.Figure(data=[go.Pie(
-                labels=df_serviciable["serviciable"],
-                values=df_serviciable["total_count"],
-                hole=0.4,
-                textinfo="percent+label",
-                marker=dict(colors=["#81c784", "#e57373", "#bdbdbd"])
-            )])
-            fig_s.update_layout(
-                title="Distribución de Viabilidades (Serviciables / No / Desconocidas)",
-                title_x=0.1,
-                showlegend=False
-            )
-            st.plotly_chart(fig_s, config={'width': 'stretch', 'theme': 'streamlit'})
+        fig_s = go.Figure(data=[go.Pie(
+            labels=df_serviciable["Serviciable"],
+            values=df_serviciable["Total"],
+            hole=0.4,
+            textinfo="percent+label",
+            marker=dict(colors=["#81c784", "#e57373", "#bdbdbd"])
+        )])
+        fig_s.update_layout(
+            title="Distribución de Viabilidades (Serviciables / No / Desconocidas)",
+            title_x=0.1,
+            showlegend=False
+        )
+        st.plotly_chart(fig_s, config={'width': 'stretch', 'theme': 'streamlit'})
 
     with colv2:
-        if not df_estado.empty and "total_count" in df_estado.columns:
-            fig_e = go.Figure(data=[go.Bar(
-                x=df_estado["estado"],
-                y=df_estado["total_count"],
-                text=df_estado["total_count"],
-                textposition="outside"
-            )])
-            fig_e.update_layout(
-                title="Distribución por Estado de Viabilidad",
-                title_x=0.1,
-                xaxis_title="Estado",
-                yaxis_title="Número de Viabilidades",
-                height=400
-            )
-            st.plotly_chart(fig_e, config={'width': 'stretch', 'theme': 'streamlit'})
+        fig_e = go.Figure(data=[go.Bar(
+            x=df_estado["Estado"],
+            y=df_estado["Total"],
+            text=df_estado["Total"],
+            textposition="outside"
+        )])
+        fig_e.update_layout(
+            title="Distribución por Estado de Viabilidad",
+            title_x=0.1,
+            xaxis_title="Estado",
+            yaxis_title="Número de Viabilidades",
+            height=400
+        )
+        st.plotly_chart(fig_e, config={'width': 'stretch', 'theme': 'streamlit'})
 
     colv3, colv4 = st.columns(2)
     with colv3:
-        if not df_resultado.empty and "total_count" in df_resultado.columns:
-            fig_r = go.Figure(data=[go.Bar(
-                x=df_resultado["resultado"],
-                y=df_resultado["total_count"],
-                text=df_resultado["total_count"],
-                textposition="outside"
-            )])
-            fig_r.update_layout(
-                title="Distribución por Resultado de Viabilidad",
-                title_x=0.1,
-                xaxis_title="Resultado",
-                yaxis_title="Número de Casos",
-                height=400
-            )
-            st.plotly_chart(fig_r, config={'width': 'stretch', 'theme': 'streamlit'})
+        fig_r = go.Figure(data=[go.Bar(
+            x=df_resultado["Resultado"],
+            y=df_resultado["Total"],
+            text=df_resultado["Total"],
+            textposition="outside"
+        )])
+        fig_r.update_layout(
+            title="Distribución por Resultado de Viabilidad",
+            title_x=0.1,
+            xaxis_title="Resultado",
+            yaxis_title="Número de Casos",
+            height=400
+        )
+        st.plotly_chart(fig_r, config={'width': 'stretch', 'theme': 'streamlit'})
 
     with colv4:
         st.metric(label="💬 Viabilidades con Comentarios del Gestor",
@@ -10044,41 +9318,22 @@ def generar_informe(fecha_inicio, fecha_fin):
     <div style="text-align: justify;">
     En el periodo comprendido entre <strong>{fecha_inicio}</strong> y <strong>{fecha_fin}</strong>, 
     se registraron un total de <strong>{total_viabilidades}</strong> viabilidades.  
-    """
-
-    if not df_serviciable.empty and "total_count" in df_serviciable.columns:
-        resumen_viabilidades += """
-        De ellas, las categorías de <strong>serviciabilidad</strong> se distribuyen así:
-        <ul>
-        """ + "".join([f"<li>{row['serviciable']}: <strong>{row['total_count']}</strong></li>" for _, row in
-                       df_serviciable.iterrows()]) + """
-        </ul>
-        """
-
-    if not df_estado.empty and "total_count" in df_estado.columns:
-        resumen_viabilidades += """
-        Respecto al <strong>estado administrativo</strong>, los casos se reparten entre:
-        <ul>
-        """ + "".join(
-            [f"<li>{row['estado']}: <strong>{row['total_count']}</strong></li>" for _, row in df_estado.iterrows()]) + """
-        </ul>
-        """
-
-    if not df_resultado.empty and "total_count" in df_resultado.columns:
-        resumen_viabilidades += """
-        Y en cuanto al <strong>resultado final</strong> de las viabilidades:
-        <ul>
-        """ + "".join([f"<li>{row['resultado']}: <strong>{row['total_count']}</strong></li>" for _, row in
-                       df_resultado.iterrows()]) + """
-        </ul>
-        """
-
-    resumen_viabilidades += f"""
+    De ellas, las categorías de <strong>serviciabilidad</strong> se distribuyen así:
+    <ul>
+    {"".join([f"<li>{row['Serviciable']}: <strong>{row['Total']}</strong></li>" for _, row in df_serviciable.iterrows()])}
+    </ul>
+    Respecto al <strong>estado administrativo</strong>, los casos se reparten entre:
+    <ul>
+    {"".join([f"<li>{row['Estado']}: <strong>{row['Total']}</strong></li>" for _, row in df_estado.iterrows()])}
+    </ul>
+    Y en cuanto al <strong>resultado final</strong> de las viabilidades:
+    <ul>
+    {"".join([f"<li>{row['Resultado']}: <strong>{row['Total']}</strong></li>" for _, row in df_resultado.iterrows()])}
+    </ul>
     Finalmente, <strong>{total_comentarios}</strong> viabilidades (<strong>{porcentaje_comentarios:.2f}%</strong>) 
     incluyen comentarios del gestor, lo que refleja el nivel de seguimiento técnico del proceso.
     </div>
     """
-
     st.markdown(resumen_viabilidades, unsafe_allow_html=True)
 
     # ─────────────────────────────────────────────
@@ -10091,40 +9346,40 @@ def generar_informe(fecha_inicio, fecha_fin):
 
     # 1️⃣ Total de precontratos en el periodo
     query_total_precontratos = """
-        SELECT COUNT(*) 
-        FROM precontratos 
-        WHERE DATE(fecha) BETWEEN %s AND %s
-    """
+           SELECT COUNT(*) 
+           FROM precontratos 
+           WHERE STRFTIME('%Y-%m-%d', fecha) BETWEEN %s AND %s
+       """
     total_precontratos = ejecutar_consulta(query_total_precontratos, (fecha_inicio, fecha_fin))
 
     # 2️⃣ Precontratos por comercial
     query_precontratos_comercial = """
-        SELECT comercial, COUNT(*) as total
-        FROM precontratos
-        WHERE DATE(fecha) BETWEEN %s AND %s
-        GROUP BY comercial
-        ORDER BY total DESC
-    """
+           SELECT comercial, COUNT(*) as total
+           FROM precontratos
+           WHERE STRFTIME('%Y-%m-%d', fecha) BETWEEN %s AND %s
+           GROUP BY comercial
+           ORDER BY total DESC
+       """
     df_precontratos_comercial = pd.read_sql_query(query_precontratos_comercial, conn, params=(fecha_inicio, fecha_fin))
 
     # 3️⃣ Precontratos por tarifa
     query_precontratos_tarifa = """
-        SELECT tarifas, COUNT(*) as total
-        FROM precontratos
-        WHERE DATE(fecha) BETWEEN %s AND %s
-        GROUP BY tarifas
-        ORDER BY total DESC
-    """
+           SELECT tarifas, COUNT(*) as total
+           FROM precontratos
+           WHERE STRFTIME('%Y-%m-%d', fecha) BETWEEN %s AND %s
+           GROUP BY tarifas
+           ORDER BY total DESC
+       """
     df_precontratos_tarifa = pd.read_sql_query(query_precontratos_tarifa, conn, params=(fecha_inicio, fecha_fin))
 
     # 4️⃣ Precontratos completados (con firma)
     query_precontratos_completados = """
-        SELECT COUNT(*) 
-        FROM precontratos 
-        WHERE firma IS NOT NULL 
-          AND TRIM(firma) <> ''
-          AND DATE(fecha) BETWEEN %s AND %s
-    """
+           SELECT COUNT(*) 
+           FROM precontratos 
+           WHERE firma IS NOT NULL 
+             AND TRIM(firma) <> ''
+             AND STRFTIME('%Y-%m-%d', fecha) BETWEEN %s AND %s
+       """
     total_precontratos_completados = ejecutar_consulta(query_precontratos_completados, (fecha_inicio, fecha_fin))
     porcentaje_completados = (
                 total_precontratos_completados / total_precontratos * 100) if total_precontratos > 0 else 0
@@ -10181,15 +9436,15 @@ def generar_informe(fecha_inicio, fecha_fin):
 
     # Resumen Precontratos
     resumen_precontratos = f"""
-    <div style="text-align: justify;">
-    En el periodo analizado, se han generado <strong>{total_precontratos}</strong> precontratos. 
-    De estos, <strong>{total_precontratos_completados}</strong> han sido completados por los clientes, 
-    lo que representa una tasa de completado del <strong>{porcentaje_completados:.1f}%</strong>.
-    {" El comercial con mayor número de precontratos es " + df_precontratos_comercial.iloc[0]['comercial'] + " con " + str(df_precontratos_comercial.iloc[0]['total']) + " precontratos." if not df_precontratos_comercial.empty else ""}
-    {" La tarifa más utilizada es " + df_precontratos_tarifa.iloc[0]['tarifas'] + " con " + str(df_precontratos_tarifa.iloc[0]['total']) + " precontratos." if not df_precontratos_tarifa.empty else ""}
-    </div>
-    <br>
-    """
+       <div style="text-align: justify;">
+       En el periodo analizado, se han generado <strong>{total_precontratos}</strong> precontratos. 
+       De estos, <strong>{total_precontratos_completados}</strong> han sido completados por los clientes, 
+       lo que representa una tasa de completado del <strong>{porcentaje_completados:.1f}%</strong>.
+       {" El comercial con mayor número de precontratos es " + df_precontratos_comercial.iloc[0]['comercial'] + " con " + str(df_precontratos_comercial.iloc[0]['total']) + " precontratos." if not df_precontratos_comercial.empty else ""}
+       {" La tarifa más utilizada es " + df_precontratos_tarifa.iloc[0]['tarifas'] + " con " + str(df_precontratos_tarifa.iloc[0]['total']) + " precontratos." if not df_precontratos_tarifa.empty else ""}
+       </div>
+       <br>
+       """
     st.markdown(resumen_precontratos, unsafe_allow_html=True)
 
     # ─────────────────────────────────────────────
@@ -10202,50 +9457,50 @@ def generar_informe(fecha_inicio, fecha_fin):
 
     # 1️⃣ Total de contratos en el periodo
     query_total_contratos = """
-        SELECT COUNT(*) 
-        FROM seguimiento_contratos 
-        WHERE DATE(fecha_ingreso) BETWEEN %s AND %s
-    """
+           SELECT COUNT(*) 
+           FROM seguimiento_contratos 
+           WHERE STRFTIME('%Y-%m-%d', fecha_ingreso) BETWEEN %s AND %s
+       """
     total_contratos = ejecutar_consulta(query_total_contratos, (fecha_inicio, fecha_fin))
 
     # 2️⃣ Contratos por estado
     query_contratos_estado = """
-        SELECT estado, COUNT(*) as total
-        FROM seguimiento_contratos
-        WHERE DATE(fecha_ingreso) BETWEEN %s AND %s
-        GROUP BY estado
-        ORDER BY total DESC
-    """
+           SELECT estado, COUNT(*) as total
+           FROM seguimiento_contratos
+           WHERE STRFTIME('%Y-%m-%d', fecha_ingreso) BETWEEN %s AND %s
+           GROUP BY estado
+           ORDER BY total DESC
+       """
     df_contratos_estado = pd.read_sql_query(query_contratos_estado, conn, params=(fecha_inicio, fecha_fin))
 
     # 3️⃣ Contratos por comercial
     query_contratos_comercial = """
-        SELECT comercial, COUNT(*) as total
-        FROM seguimiento_contratos
-        WHERE DATE(fecha_ingreso) BETWEEN %s AND %s
-        GROUP BY comercial
-        ORDER BY total DESC
-    """
+           SELECT comercial, COUNT(*) as total
+           FROM seguimiento_contratos
+           WHERE STRFTIME('%Y-%m-%d', fecha_ingreso) BETWEEN %s AND %s
+           GROUP BY comercial
+           ORDER BY total DESC
+       """
     df_contratos_comercial = pd.read_sql_query(query_contratos_comercial, conn, params=(fecha_inicio, fecha_fin))
 
     # 4️⃣ Contratos activos vs finalizados
     query_contratos_activos = """
-        SELECT COUNT(*) 
-        FROM seguimiento_contratos 
-        WHERE estado IN ('Activo', 'En proceso', 'Pendiente')
-          AND DATE(fecha_ingreso) BETWEEN %s AND %s
-    """
+           SELECT COUNT(*) 
+           FROM seguimiento_contratos 
+           WHERE estado IN ('Activo', 'En proceso', 'Pendiente')
+             AND STRFTIME('%Y-%m-%d', fecha_ingreso) BETWEEN %s AND %s
+       """
     total_contratos_activos = ejecutar_consulta(query_contratos_activos, (fecha_inicio, fecha_fin))
     porcentaje_activos = (total_contratos_activos / total_contratos * 100) if total_contratos > 0 else 0
 
     # 5️⃣ Contratos con fecha de instalación
     query_contratos_instalados = """
-        SELECT COUNT(*) 
-        FROM seguimiento_contratos 
-        WHERE fecha_instalacion IS NOT NULL 
-          AND TRIM(fecha_instalacion) <> ''
-          AND DATE(fecha_ingreso) BETWEEN %s AND %s
-    """
+           SELECT COUNT(*) 
+           FROM seguimiento_contratos 
+           WHERE fecha_instalacion IS NOT NULL 
+             AND TRIM(fecha_instalacion) <> ''
+             AND STRFTIME('%Y-%m-%d', fecha_ingreso) BETWEEN %s AND %s
+       """
     total_contratos_instalados = ejecutar_consulta(query_contratos_instalados, (fecha_inicio, fecha_fin))
     porcentaje_instalados = (total_contratos_instalados / total_contratos * 100) if total_contratos > 0 else 0
 
@@ -10298,16 +9553,16 @@ def generar_informe(fecha_inicio, fecha_fin):
 
     # Resumen Contratos
     resumen_contratos = f"""
-    <div style="text-align: justify;">
-    En el periodo analizado, se han registrado <strong>{total_contratos}</strong> contratos en el sistema. 
-    De estos, <strong>{total_contratos_activos}</strong> se encuentran activos o en proceso 
-    (<strong>{porcentaje_activos:.1f}%</strong> del total), y <strong>{total_contratos_instalados}</strong> 
-    ya cuentan con fecha de instalación confirmada.
-    {" El estado más común es " + df_contratos_estado.iloc[0]['estado'] + " con " + str(df_contratos_estado.iloc[0]['total']) + " contratos." if not df_contratos_estado.empty else ""}
-    {" El comercial con mayor número de contratos es " + df_contratos_comercial.iloc[0]['comercial'] + " con " + str(df_contratos_comercial.iloc[0]['total']) + " contratos." if not df_contratos_comercial.empty else ""}
-    </div>
-    <br>
-    """
+       <div style="text-align: justify;">
+       En el periodo analizado, se han registrado <strong>{total_contratos}</strong> contratos en el sistema. 
+       De estos, <strong>{total_contratos_activos}</strong> se encuentran activos o en proceso 
+       (<strong>{porcentaje_activos:.1f}%</strong> del total), y <strong>{total_contratos_instalados}</strong> 
+       ya cuentan con fecha de instalación confirmada.
+       {" El estado más común es " + df_contratos_estado.iloc[0]['estado'] + " con " + str(df_contratos_estado.iloc[0]['total']) + " contratos." if not df_contratos_estado.empty else ""}
+       {" El comercial con mayor número de contratos es " + df_contratos_comercial.iloc[0]['comercial'] + " con " + str(df_contratos_comercial.iloc[0]['total']) + " contratos." if not df_contratos_comercial.empty else ""}
+       </div>
+       <br>
+       """
     st.markdown(resumen_contratos, unsafe_allow_html=True)
 
     return informe
@@ -10317,7 +9572,7 @@ def mostrar_control_versiones():
     try:
         # Conexión a la base de datos
         conn = sqlitecloud.connect(
-            "sqlitecloud://ceafu04onz.g6.sqlite.cloud:8860/usuarios.db?apikey=Qo9m18B9ONpfEGYngUKm99QB5bgzUTGtK7iAcThmwvY"
+            "sqlitecloud://ceafu04onz.g6.sqlite.cloud:8860/usuarios.db%sapikey=Qo9m18B9ONpfEGYngUKm99QB5bgzUTGtK7iAcThmwvY"
         )
         cursor = conn.cursor()
 
@@ -10475,10 +9730,10 @@ def create_tipo_vivienda_distribution_graph(cursor) -> go.Figure:
     """Crea gráfico de distribución de tipos de vivienda"""
     cursor.execute("""
         SELECT 
-            COALESCE(NULLIF("Tipo_Vivienda", ''), 'No especificado') as "Tipo_Vivienda",
+            COALESCE(NULLIF(Tipo_Vivienda, ''), 'No especificado') as Tipo_Vivienda,
             COUNT(*) as count
         FROM comercial_rafa 
-        GROUP BY "Tipo_Vivienda"
+        GROUP BY Tipo_Vivienda
         ORDER BY count DESC
         LIMIT 8
     """)
@@ -10637,10 +9892,10 @@ def home_page():
                     municipio,
                     serviciable,
                     incidencia,
-                    "Tipo_Vivienda",
+                    Tipo_Vivienda,
                     COUNT(*) as total
                 FROM comercial_rafa
-                GROUP BY provincia, municipio, serviciable, incidencia, "Tipo_Vivienda"
+                GROUP BY provincia, municipio, serviciable, incidencia, Tipo_Vivienda
                 ORDER BY total DESC
                 LIMIT 20
             """)
@@ -10657,6 +9912,13 @@ def home_page():
     finally:
         cursor.close()
         conn.close()
+
+
+# Si necesitas mantener compatibilidad con la versión anterior
+def obtener_conexion():
+    """Wrapper para mantener compatibilidad"""
+    return get_db_connection()  # Asumiendo que existe esta función
+
 
 if __name__ == "__main__":
     admin_dashboard()
