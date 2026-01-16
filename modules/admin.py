@@ -1775,7 +1775,7 @@ def viabilidades_seccion():
                            poblacion, nombre_cliente, telefono, serviciable, resultado, 
                            estado_obra, fecha_entrega, coste, justificacion, zona_estudio,
                            contratos, respuesta_comercial, nuevapromocion, comentario,
-                           created_at, updated_at
+                           fecha_viabilidad
                     FROM viabilidades
                 """
                 viabilidades_df = pd.read_sql(query, conn)
