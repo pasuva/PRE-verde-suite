@@ -1,3 +1,4 @@
+import os
 import psycopg2
 
 from modules.notificaciones import correo_usuario, correo_nuevas_zonas_comercial, correo_excel_control, \
