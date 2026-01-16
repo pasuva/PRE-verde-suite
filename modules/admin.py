@@ -9931,43 +9931,50 @@ def generar_informe(fecha_inicio, fecha_fin):
                 WHEN LOWER(serviciable) = 'sí' THEN 'Sí'
                 WHEN LOWER(serviciable) = 'no' THEN 'No'
                 ELSE 'Desconocido'
-            END AS Serviciable,
-            COUNT(*) AS Total
+            END AS serviciable,
+            COUNT(*) AS total_count
         FROM viabilidades
         WHERE DATE(fecha_viabilidad) BETWEEN %s AND %s
-        GROUP BY Serviciable
+        GROUP BY 
+            CASE 
+                WHEN LOWER(serviciable) = 'sí' THEN 'Sí'
+                WHEN LOWER(serviciable) = 'no' THEN 'No'
+                ELSE 'Desconocido'
+            END
     """
     df_serviciable = pd.read_sql_query(query_serviciable, conn, params=(fecha_inicio, fecha_fin))
-    total_viabilidades = df_serviciable["Total"].sum() if not df_serviciable.empty else 0
+    total_viabilidades = df_serviciable[
+        "total_count"].sum() if not df_serviciable.empty and "total_count" in df_serviciable.columns else 0
 
     # 2️⃣ Estado (fase administrativa)
     query_estado = """
         SELECT 
-            COALESCE(estado, 'Sin estado') AS Estado,
-            COUNT(*) AS Total
+            COALESCE(estado, 'Sin estado') AS estado,
+            COUNT(*) AS total_count
         FROM viabilidades
         WHERE DATE(fecha_viabilidad) BETWEEN %s AND %s
-        GROUP BY Estado
-        ORDER BY Total DESC
+        GROUP BY COALESCE(estado, 'Sin estado')
+        ORDER BY total_count DESC
     """
     df_estado = pd.read_sql_query(query_estado, conn, params=(fecha_inicio, fecha_fin))
 
     # 3️⃣ Resultado (dictamen final)
     query_resultado = """
         SELECT 
-            COALESCE(resultado, 'Sin resultado') AS Resultado,
-            COUNT(*) AS Total
+            COALESCE(resultado, 'Sin resultado') AS resultado,
+            COUNT(*) AS total_count
         FROM viabilidades
         WHERE DATE(fecha_viabilidad) BETWEEN %s AND %s
-        GROUP BY Resultado
-        ORDER BY Total DESC
+        GROUP BY COALESCE(resultado, 'Sin resultado')
+        ORDER BY total_count DESC
     """
     df_resultado = pd.read_sql_query(query_resultado, conn, params=(fecha_inicio, fecha_fin))
 
     # 4️⃣ Viabilidades con comentarios del gestor
     query_comentarios = """
-        SELECT COUNT(*) FROM viabilidades 
-        WHERE comentarios_gestor IS NOT NULL AND TRIM(comentarios_gestor) <> ''
+        SELECT COUNT(*) as total_count FROM viabilidades 
+        WHERE comentarios_gestor IS NOT NULL 
+          AND TRIM(comentarios_gestor) <> ''
           AND DATE(fecha_viabilidad) BETWEEN %s AND %s
     """
     total_comentarios = ejecutar_consulta(query_comentarios, (fecha_inicio, fecha_fin))
@@ -9980,10 +9987,10 @@ def generar_informe(fecha_inicio, fecha_fin):
     # ──────────────────────────────
     colv1, colv2 = st.columns(2)
     with colv1:
-        if not df_serviciable.empty:
+        if not df_serviciable.empty and "total_count" in df_serviciable.columns:
             fig_s = go.Figure(data=[go.Pie(
-                labels=df_serviciable["Serviciable"],
-                values=df_serviciable["Total"],
+                labels=df_serviciable["serviciable"],
+                values=df_serviciable["total_count"],
                 hole=0.4,
                 textinfo="percent+label",
                 marker=dict(colors=["#81c784", "#e57373", "#bdbdbd"])
@@ -9996,11 +10003,11 @@ def generar_informe(fecha_inicio, fecha_fin):
             st.plotly_chart(fig_s, config={'width': 'stretch', 'theme': 'streamlit'})
 
     with colv2:
-        if not df_estado.empty:
+        if not df_estado.empty and "total_count" in df_estado.columns:
             fig_e = go.Figure(data=[go.Bar(
-                x=df_estado["Estado"],
-                y=df_estado["Total"],
-                text=df_estado["Total"],
+                x=df_estado["estado"],
+                y=df_estado["total_count"],
+                text=df_estado["total_count"],
                 textposition="outside"
             )])
             fig_e.update_layout(
@@ -10014,11 +10021,11 @@ def generar_informe(fecha_inicio, fecha_fin):
 
     colv3, colv4 = st.columns(2)
     with colv3:
-        if not df_resultado.empty:
+        if not df_resultado.empty and "total_count" in df_resultado.columns:
             fig_r = go.Figure(data=[go.Bar(
-                x=df_resultado["Resultado"],
-                y=df_resultado["Total"],
-                text=df_resultado["Total"],
+                x=df_resultado["resultado"],
+                y=df_resultado["total_count"],
+                text=df_resultado["total_count"],
                 textposition="outside"
             )])
             fig_r.update_layout(
@@ -10042,22 +10049,41 @@ def generar_informe(fecha_inicio, fecha_fin):
     <div style="text-align: justify;">
     En el periodo comprendido entre <strong>{fecha_inicio}</strong> y <strong>{fecha_fin}</strong>, 
     se registraron un total de <strong>{total_viabilidades}</strong> viabilidades.  
-    De ellas, las categorías de <strong>serviciabilidad</strong> se distribuyen así:
-    <ul>
-    {"".join([f"<li>{row['Serviciable']}: <strong>{row['Total']}</strong></li>" for _, row in df_serviciable.iterrows()])}
-    </ul>
-    Respecto al <strong>estado administrativo</strong>, los casos se reparten entre:
-    <ul>
-    {"".join([f"<li>{row['Estado']}: <strong>{row['Total']}</strong></li>" for _, row in df_estado.iterrows()])}
-    </ul>
-    Y en cuanto al <strong>resultado final</strong> de las viabilidades:
-    <ul>
-    {"".join([f"<li>{row['Resultado']}: <strong>{row['Total']}</strong></li>" for _, row in df_resultado.iterrows()])}
-    </ul>
+    """
+
+    if not df_serviciable.empty and "total_count" in df_serviciable.columns:
+        resumen_viabilidades += """
+        De ellas, las categorías de <strong>serviciabilidad</strong> se distribuyen así:
+        <ul>
+        """ + "".join([f"<li>{row['serviciable']}: <strong>{row['total_count']}</strong></li>" for _, row in
+                       df_serviciable.iterrows()]) + """
+        </ul>
+        """
+
+    if not df_estado.empty and "total_count" in df_estado.columns:
+        resumen_viabilidades += """
+        Respecto al <strong>estado administrativo</strong>, los casos se reparten entre:
+        <ul>
+        """ + "".join(
+            [f"<li>{row['estado']}: <strong>{row['total_count']}</strong></li>" for _, row in df_estado.iterrows()]) + """
+        </ul>
+        """
+
+    if not df_resultado.empty and "total_count" in df_resultado.columns:
+        resumen_viabilidades += """
+        Y en cuanto al <strong>resultado final</strong> de las viabilidades:
+        <ul>
+        """ + "".join([f"<li>{row['resultado']}: <strong>{row['total_count']}</strong></li>" for _, row in
+                       df_resultado.iterrows()]) + """
+        </ul>
+        """
+
+    resumen_viabilidades += f"""
     Finalmente, <strong>{total_comentarios}</strong> viabilidades (<strong>{porcentaje_comentarios:.2f}%</strong>) 
     incluyen comentarios del gestor, lo que refleja el nivel de seguimiento técnico del proceso.
     </div>
     """
+
     st.markdown(resumen_viabilidades, unsafe_allow_html=True)
 
     # ─────────────────────────────────────────────
