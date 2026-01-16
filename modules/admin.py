@@ -2692,12 +2692,59 @@ def guardar_viabilidad(datos):
     cursor = None
 
     try:
+        # Validar datos antes de intentar guardar
+        if not datos or len(datos) < 18:
+            st.error("❌ Error: Datos incompletos para guardar la viabilidad")
+            return False
+
         conn = obtener_conexion()
         if not conn:
-            st.toast("❌ Error de conexión a la base de datos")
+            st.error("❌ Error de conexión a la base de datos")
             return False
 
         cursor = conn.cursor()
+
+        # DEPURACIÓN: Mostrar los datos que se van a insertar
+        st.info(f"🔍 Intentando guardar viabilidad con ticket: {datos[10]}")
+
+        # Verificar si el ticket ya existe para evitar duplicados
+        cursor.execute("SELECT COUNT(*) FROM viabilidades WHERE ticket = %s", (datos[10],))
+        existe = cursor.fetchone()[0]
+
+        if existe > 0:
+            st.warning(f"⚠️ El ticket {datos[10]} ya existe en la base de datos")
+
+            # Preguntar si se desea actualizar
+            if st.button("¿Actualizar viabilidad existente?"):
+                # Actualizar la viabilidad existente
+                cursor.execute("""
+                    UPDATE viabilidades SET
+                        latitud = %s,
+                        longitud = %s,
+                        provincia = %s,
+                        municipio = %s,
+                        poblacion = %s,
+                        vial = %s,
+                        numero = %s,
+                        letra = %s,
+                        cp = %s,
+                        comentario = %s,
+                        fecha_viabilidad = NOW(),
+                        nombre_cliente = %s,
+                        telefono = %s,
+                        comercial = %s,
+                        olt_info = %s,
+                        apartment_id = %s,
+                        fecha_entrega = %s,
+                        estado_obra = %s
+                    WHERE ticket = %s
+                """, (*datos, datos[10]))
+
+                conn.commit()
+                st.success(f"✅ Viabilidad actualizada correctamente para ticket: {datos[10]}")
+                return True
+            else:
+                return False
 
         # PostgreSQL usa %s y NOW() en lugar de CURRENT_TIMESTAMP
         cursor.execute("""
@@ -2729,96 +2776,44 @@ def guardar_viabilidad(datos):
         nuevo_id = cursor.fetchone()[0]
         conn.commit()
 
-        st.toast(f"✅ Viabilidad guardada correctamente (ID: {nuevo_id})")
-
-        # Obtener los emails de todos los administradores
-        cursor.execute("SELECT email FROM usuarios WHERE role = 'admin'")
-        resultados = cursor.fetchall()
-        emails_admin = [fila[0] for fila in resultados]
-
-        # Obtener email del comercial seleccionado
-        comercial_email = None
-        cursor.execute("SELECT email FROM usuarios WHERE username = %s", (datos[13],))  # índice 13 es el comercial
-        fila = cursor.fetchone()
-        if fila:
-            comercial_email = fila[0]
-
-        # Información de la viabilidad
-        ticket_id = datos[10]  # 'ticket'
-        nombre_comercial = datos[13]  # el comercial elegido en el formulario
-        descripcion_viabilidad = (
-            f"📝 Viabilidad para el ticket {ticket_id}:<br><br>"
-            f"🧑‍💼 Comercial: {nombre_comercial}<br><br>"
-            f"📍 Latitud: {datos[0]}<br>"
-            f"📍 Longitud: {datos[1]}<br>"
-            f"🏞️ Provincia: {datos[2]}<br>"
-            f"🏙️ Municipio: {datos[3]}<br>"
-            f"🏘️ Población: {datos[4]}<br>"
-            f"🛣️ Vial: {datos[5]}<br>"
-            f"🔢 Número: {datos[6]}<br>"
-            f"🔤 Letra: {datos[7]}<br>"
-            f"🏷️ Código Postal (CP): {datos[8]}<br>"
-            f"💬 Comentario: {datos[9]}<br>"
-            f"👥 Nombre Cliente: {datos[11]}<br>"
-            f"📞 Teléfono: {datos[12]}<br><br>"
-            f"🏢 OLT: {datos[14]}<br>"
-            f"🏘️ Apartment ID: {datos[15]}<br><br>"
-        )
-
-        # Agregar los nuevos campos si tienen valor
-        if datos[16]:  # fecha_entrega
-            descripcion_viabilidad += f"📅 Fecha de entrega: {datos[16]}<br>"
-
-        if datos[17]:  # estado_obra
-            descripcion_viabilidad += f"🏗️ Estado de la obra: {datos[17]}<br>"
-
-        descripcion_viabilidad += (
-            f"<br>"
-            f"ℹ️ Por favor, revise todos los detalles de la viabilidad para asegurar que toda la información esté correcta. "
-            f"Si tiene alguna pregunta o necesita más detalles, no dude en ponerse en contacto con el comercial {nombre_comercial} o con el equipo responsable."
-        )
-
-        # Enviar la notificación por correo a cada administrador
-        if emails_admin:
-            for email in emails_admin:
-                correo_viabilidad_comercial(email, ticket_id, descripcion_viabilidad)
-            st.toast(
-                f"📧 Se ha enviado una notificación a los administradores: {', '.join(emails_admin)} sobre la viabilidad completada."
-            )
-        else:
-            st.toast("⚠️ No se encontró ningún email de administrador, no se pudo enviar la notificación.")
-
-        # Enviar notificación al comercial seleccionado
-        if comercial_email:
-            correo_viabilidad_comercial(comercial_email, ticket_id, descripcion_viabilidad)
-            st.toast(
-                f"📧 Se ha enviado una notificación al comercial responsable: {nombre_comercial} ({comercial_email})")
-        else:
-            st.toast(f"⚠️ No se pudo encontrar el email del comercial {nombre_comercial}.")
+        st.success(f"✅ Viabilidad guardada correctamente (ID: {nuevo_id}, Ticket: {datos[10]})")
+        st.balloons()  # Efecto visual de celebración
 
         # Registrar en trazabilidad
-        log_trazabilidad(
-            nombre_comercial,
-            "Crear Viabilidad",
-            f"Creó nueva viabilidad - Ticket: {ticket_id}, Cliente: {datos[11]}, Ubicación: {datos[2]}, {datos[3]}"
-        )
+        try:
+            log_trazabilidad(
+                datos[13],  # comercial
+                "Crear Viabilidad",
+                f"Creó nueva viabilidad - Ticket: {datos[10]}, Cliente: {datos[11]}, Ubicación: {datos[2]}, {datos[3]}"
+            )
+        except Exception as e:
+            st.warning(f"⚠️ No se pudo registrar en trazabilidad: {e}")
+
+        # Enviar notificaciones por correo
+        enviar_notificaciones_viabilidad(datos, nuevo_id)
 
         return True
 
     except psycopg2.IntegrityError as e:
-        st.toast(f"❌ Error de duplicado (ticket ya existe): {e}")
+        error_msg = str(e)
+        if "unique constraint" in error_msg.lower():
+            st.error(f"❌ Error: El ticket {datos[10]} ya existe en la base de datos")
+        else:
+            st.error(f"❌ Error de integridad en la base de datos: {error_msg}")
         if conn:
             conn.rollback()
         return False
 
     except psycopg2.Error as e:
-        st.toast(f"❌ Error de PostgreSQL: {e}")
+        st.error(f"❌ Error de PostgreSQL: {e}")
         if conn:
             conn.rollback()
         return False
 
     except Exception as e:
-        st.toast(f"❌ Error al guardar viabilidad: {e}")
+        st.error(f"❌ Error inesperado al guardar viabilidad: {e}")
+        import traceback
+        st.code(traceback.format_exc())
         return False
 
     finally:
