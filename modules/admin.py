@@ -1771,11 +1771,7 @@ def viabilidades_seccion():
 
                 # Cargar datos con columnas específicas (mejor que SELECT *)
                 query = """
-                    SELECT id, ticket, apartment_id, latitud, longitud, provincia, municipio, 
-                           poblacion, nombre_cliente, telefono, serviciable, resultado, 
-                           estado_obra, fecha_entrega, coste, justificacion, zona_estudio,
-                           contratos, respuesta_comercial, nuevapromocion, comentario,
-                           fecha_viabilidad
+                    SELECT *
                     FROM viabilidades
                 """
                 viabilidades_df = pd.read_sql(query, conn)
