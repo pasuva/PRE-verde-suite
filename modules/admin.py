@@ -1,4 +1,4 @@
-from sqlalchemy.dialects.postgresql import psycopg2
+import psycopg2
 
 from modules.notificaciones import correo_usuario, correo_nuevas_zonas_comercial, correo_excel_control, \
     correo_envio_presupuesto_manual, correo_nueva_version, correo_asignacion_puntos_existentes, \
