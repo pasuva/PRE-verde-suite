@@ -777,7 +777,7 @@ def cargar_datos_por_provincia(provincia):
                 site_operational_state,
                 apartment_operational_state,
                 zona
-            FROM "datos_UIs"
+            FROM "datos_uis"
             WHERE provincia = %s
         """
         datos_uis = pd.read_sql(query_datos_uis, conn, params=(provincia,))
@@ -932,7 +932,7 @@ def cargar_datos_limitados() -> Tuple[pd.DataFrame, pd.DataFrame]:
                 COALESCE(cp, '') as cp,
                 COALESCE(serviciable, '') as serviciable,
                 COALESCE(estado, '') as estado
-            FROM "datos_UIs" 
+            FROM "datos_uis" 
             WHERE latitud IS NOT NULL 
             AND longitud IS NOT NULL
             AND latitud != 0 
@@ -1019,7 +1019,7 @@ def buscar_por_id(apartment_id: str) -> Tuple[pd.DataFrame, pd.DataFrame]:
                 COALESCE(cp, '') as cp,
                 COALESCE(serviciable, '') as serviciable,
                 COALESCE(estado, '') as estado
-            FROM "datos_UIs" 
+            FROM "datos_uis" 
             WHERE UPPER(TRIM(apartment_id)) = %s
             OR apartment_id ILIKE %s
         """
@@ -1045,7 +1045,7 @@ def buscar_por_id(apartment_id: str) -> Tuple[pd.DataFrame, pd.DataFrame]:
                     cp,
                     serviciable,
                     estado
-                FROM "datos_UIs" 
+                FROM "datos_uis" 
                 WHERE apartment_id ILIKE %s
                 LIMIT 10
             """
