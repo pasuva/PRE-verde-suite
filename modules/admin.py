@@ -754,36 +754,62 @@ def cargar_datos_por_provincia(provincia):
     try:
         conn = obtener_conexion()
         if not conn:
-            print(f"❌ Error de conexión al cargar datos para provincia: {provincia}")
+            st.error(f"❌ Error de conexión al cargar datos para provincia: {provincia}")
             return pd.DataFrame(), pd.DataFrame()
 
-        # Consulta de datos_uis - PostgreSQL usa %s
+        # Consulta de datos_UIs CORREGIDA
         query_datos_uis = """
-            SELECT apartment_id, latitud, longitud, provincia, municipio, poblacion, 
-                   tipo_olt_rental, serviciable, vial, numero, letra, cp, cto_id, 
-                   cto, site_operational_state, apartment_operational_state, zona
-            FROM datos_uis
+            SELECT 
+                apartment_id, 
+                latitud, 
+                longitud, 
+                provincia, 
+                municipio, 
+                poblacion, 
+                vial, 
+                numero,
+                letra,
+                cp,
+                tipo_olt_rental,
+                serviciable,
+                estado,
+                cto,
+                site_operational_state,
+                apartment_operational_state,
+                zona
+            FROM "datos_UIs"
             WHERE provincia = %s
         """
         datos_uis = pd.read_sql(query_datos_uis, conn, params=(provincia,))
 
-        # Consulta de comercial_rafa - PostgreSQL usa %s
+        # Consulta de comercial_rafa CORREGIDA
         query_comercial_rafa = """
-            SELECT apartment_id, serviciable, Contrato, provincia, municipio, poblacion,
-                   motivo_serviciable, incidencia, motivo_incidencia, nombre_cliente,
-                   telefono, direccion_alternativa, observaciones, comercial, comentarios
+            SELECT 
+                apartment_id, 
+                comercial, 
+                serviciable, 
+                incidencia, 
+                "Contrato" as contrato,
+                motivo_serviciable,
+                motivo_incidencia,
+                nombre_cliente,
+                telefono,
+                direccion_alternativa,
+                observaciones,
+                comentarios
             FROM comercial_rafa
             WHERE provincia = %s
         """
         comercial_rafa_df = pd.read_sql(query_comercial_rafa, conn, params=(provincia,))
 
-        print(
-            f"✅ Cargados {len(datos_uis)} registros de 'datos_uis' y {len(comercial_rafa_df)} de 'comercial_rafa' para {provincia}")
+        st.success(f"✅ Cargados {len(datos_uis)} registros de 'datos_UIs' y {len(comercial_rafa_df)} de 'comercial_rafa' para {provincia}")
 
         return datos_uis, comercial_rafa_df
 
     except Exception as e:
-        print(f"❌ Error al cargar datos para provincia {provincia}: {e}")
+        st.error(f"❌ Error al cargar datos para provincia {provincia}: {e}")
+        import traceback
+        st.code(traceback.format_exc())
         return pd.DataFrame(), pd.DataFrame()
 
     finally:
@@ -888,49 +914,76 @@ def cargar_datos_limitados() -> Tuple[pd.DataFrame, pd.DataFrame]:
     try:
         conn = obtener_conexion()
         if not conn:
-            print("❌ Error de conexión al cargar datos limitados")
+            st.error("❌ Error de conexión a la base de datos")
             return pd.DataFrame(), pd.DataFrame()
 
-        # Solo primeros 500 registros para carga rápida - PostgreSQL
+        # CONSULTA CORREGIDA - usando el nombre exacto de la tabla
         query_uis = """
-            SELECT apartment_id, latitud, longitud, provincia, municipio, 
-                   poblacion, vial, numero
-            FROM datos_uis 
+            SELECT 
+                apartment_id, 
+                latitud, 
+                longitud, 
+                COALESCE(provincia, '') as provincia,
+                COALESCE(municipio, '') as municipio,
+                COALESCE(poblacion, '') as poblacion,
+                COALESCE(vial, '') as vial,
+                COALESCE(numero, '') as numero,
+                COALESCE(letra, '') as letra,
+                COALESCE(cp, '') as cp,
+                COALESCE(serviciable, '') as serviciable,
+                COALESCE(estado, '') as estado
+            FROM "datos_UIs" 
             WHERE latitud IS NOT NULL 
             AND longitud IS NOT NULL
             AND latitud != 0 
             AND longitud != 0
-            ORDER BY apartment_id  -- Para consistencia
-            LIMIT 500
+            ORDER BY apartment_id
+            LIMIT 1000
         """
 
+        # CONSULTA CORREGIDA para comercial_rafa
         query_comercial = """
-            SELECT apartment_id, comercial, serviciable, incidencia, contrato
+            SELECT 
+                apartment_id, 
+                COALESCE(comercial, '') as comercial, 
+                COALESCE(serviciable, '') as serviciable, 
+                COALESCE(incidencia, '') as incidencia, 
+                COALESCE("Contrato", '') as contrato,
+                COALESCE(nombre_cliente, '') as nombre_cliente,
+                COALESCE(telefono, '') as telefono,
+                COALESCE(comentarios, '') as comentarios
             FROM comercial_rafa
-            ORDER BY apartment_id  -- Para consistencia
-            LIMIT 1000
+            ORDER BY apartment_id
+            LIMIT 2000
         """
 
         datos_uis = pd.read_sql(query_uis, conn)
         comercial_rafa = pd.read_sql(query_comercial, conn)
 
-        if not datos_uis.empty and 'latitud' in datos_uis.columns and 'longitud' in datos_uis.columns:
-            # PostgreSQL puede devolver Decimal, asegurar conversión a float
-            datos_uis['latitud'] = pd.to_numeric(datos_uis['latitud'], errors='coerce')
-            datos_uis['longitud'] = pd.to_numeric(datos_uis['longitud'], errors='coerce')
+        # Asegurar tipos de datos
+        if not datos_uis.empty:
+            for col in ['latitud', 'longitud']:
+                if col in datos_uis.columns:
+                    datos_uis[col] = pd.to_numeric(datos_uis[col], errors='coerce')
 
-            # Filtrar coordenadas inválidas
-            datos_uis = datos_uis[
-                (datos_uis['latitud'].notna()) &
-                (datos_uis['longitud'].notna())
-                ]
+            # Filtrar nulos después de conversión
+            datos_uis = datos_uis.dropna(subset=['latitud', 'longitud'])
 
-        print(f"✅ Datos limitados cargados: {len(datos_uis)} ubicaciones, {len(comercial_rafa)} registros comerciales")
+        st.success(f"✅ Datos cargados: {len(datos_uis)} ubicaciones, {len(comercial_rafa)} comerciales")
+
+        # DEBUG: Mostrar información
+        with st.expander("🔍 DEBUG - Datos cargados", expanded=False):
+            st.write("**datos_uis:**", datos_uis.shape)
+            st.dataframe(datos_uis.head(5))
+            st.write("**comercial_rafa:**", comercial_rafa.shape)
+            st.dataframe(comercial_rafa.head(5))
 
         return datos_uis, comercial_rafa
 
     except Exception as e:
-        print(f"❌ Error al cargar datos limitados: {e}")
+        st.error(f"❌ Error al cargar datos limitados: {e}")
+        import traceback
+        st.code(traceback.format_exc())
         return pd.DataFrame(), pd.DataFrame()
 
     finally:
@@ -945,41 +998,113 @@ def buscar_por_id(apartment_id: str) -> Tuple[pd.DataFrame, pd.DataFrame]:
     try:
         conn = obtener_conexion()
         if not conn:
-            print(f"❌ Error de conexión al buscar apartment_id: {apartment_id}")
+            st.error("❌ Error de conexión a la base de datos")
             return pd.DataFrame(), pd.DataFrame()
 
-        # PostgreSQL usa %s en lugar de ?
+        # Limpiar el ID de búsqueda
+        apt_id_clean = str(apartment_id).strip().upper()
+
+        # CONSULTA CORREGIDA - tabla con comillas dobles
         query_uis = """
-            SELECT apartment_id, latitud, longitud, provincia, municipio, 
-                   poblacion, vial, numero
-            FROM datos_uis 
-            WHERE apartment_id = %s 
-            AND latitud IS NOT NULL 
-            AND longitud IS NOT NULL
+            SELECT 
+                apartment_id, 
+                latitud, 
+                longitud, 
+                COALESCE(provincia, '') as provincia,
+                COALESCE(municipio, '') as municipio,
+                COALESCE(poblacion, '') as poblacion,
+                COALESCE(vial, '') as vial,
+                COALESCE(numero, '') as numero,
+                COALESCE(letra, '') as letra,
+                COALESCE(cp, '') as cp,
+                COALESCE(serviciable, '') as serviciable,
+                COALESCE(estado, '') as estado
+            FROM "datos_UIs" 
+            WHERE UPPER(TRIM(apartment_id)) = %s
+            OR apartment_id ILIKE %s
         """
 
-        query_comercial = """
-            SELECT apartment_id, comercial, serviciable, incidencia, contrato
-            FROM comercial_rafa
-            WHERE apartment_id = %s
-        """
+        # Parámetros para búsqueda
+        params = (apt_id_clean, f"%{apt_id_clean}%")
 
-        # Usar params=(apartment_id,) con %s para PostgreSQL
-        datos_uis = pd.read_sql(query_uis, conn, params=(apartment_id,))
-        comercial_rafa = pd.read_sql(query_comercial, conn, params=(apartment_id,))
+        datos_uis = pd.read_sql(query_uis, conn, params=params)
 
-        if not datos_uis.empty and 'latitud' in datos_uis.columns and 'longitud' in datos_uis.columns:
-            # PostgreSQL puede devolver Decimal, asegurar conversión
-            datos_uis['latitud'] = pd.to_numeric(datos_uis['latitud'], errors='coerce')
-            datos_uis['longitud'] = pd.to_numeric(datos_uis['longitud'], errors='coerce')
+        if datos_uis.empty:
+            # Intentar búsqueda más amplia
+            query_partial = """
+                SELECT 
+                    apartment_id, 
+                    latitud, 
+                    longitud, 
+                    provincia, 
+                    municipio, 
+                    poblacion, 
+                    vial, 
+                    numero,
+                    letra,
+                    cp,
+                    serviciable,
+                    estado
+                FROM "datos_UIs" 
+                WHERE apartment_id ILIKE %s
+                LIMIT 10
+            """
+            datos_uis = pd.read_sql(query_partial, conn, params=(f"%{apt_id_clean}%",))
 
-        print(
-            f"✅ Búsqueda por ID '{apartment_id}': {len(datos_uis)} resultados en datos_uis, {len(comercial_rafa)} en comercial_rafa")
+        # Buscar en comercial_rafa si hay resultados
+        if not datos_uis.empty:
+            apt_ids = tuple(datos_uis['apartment_id'].unique())
+
+            # Construir consulta dinámica para múltiples IDs
+            if len(apt_ids) == 1:
+                query_comercial = """
+                    SELECT 
+                        apartment_id, 
+                        comercial, 
+                        serviciable, 
+                        incidencia, 
+                        "Contrato" as contrato,
+                        nombre_cliente,
+                        telefono,
+                        comentarios
+                    FROM comercial_rafa
+                    WHERE apartment_id = %s
+                """
+                comercial_rafa = pd.read_sql(query_comercial, conn, params=(apt_ids[0],))
+            else:
+                placeholders = ','.join(['%s'] * len(apt_ids))
+                query_comercial = f"""
+                    SELECT 
+                        apartment_id, 
+                        comercial, 
+                        serviciable, 
+                        incidencia, 
+                        "Contrato" as contrato,
+                        nombre_cliente,
+                        telefono,
+                        comentarios
+                    FROM comercial_rafa
+                    WHERE apartment_id IN ({placeholders})
+                """
+                comercial_rafa = pd.read_sql(query_comercial, conn, params=apt_ids)
+        else:
+            comercial_rafa = pd.DataFrame()
+
+        # Asegurar tipos de datos
+        if not datos_uis.empty:
+            for col in ['latitud', 'longitud']:
+                if col in datos_uis.columns:
+                    datos_uis[col] = pd.to_numeric(datos_uis[col], errors='coerce')
+            datos_uis = datos_uis.dropna(subset=['latitud', 'longitud'])
+
+        st.toast(f"🔍 Encontrados {len(datos_uis)} apartments para '{apartment_id}'")
 
         return datos_uis, comercial_rafa
 
     except Exception as e:
-        print(f"❌ Error al buscar por ID {apartment_id}: {e}")
+        st.error(f"❌ Error al buscar por ID: {e}")
+        import traceback
+        st.code(traceback.format_exc())
         return pd.DataFrame(), pd.DataFrame()
 
     finally:
