@@ -7295,11 +7295,12 @@ def admin_dashboard():
         # Crear tabla si no existe (sin columna autor)
         cursor.execute("""
                 CREATE TABLE IF NOT EXISTS anuncios (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    titulo TEXT NOT NULL,
-                    descripcion TEXT NOT NULL,
-                    fecha TEXT NOT NULL
-                )
+                id SERIAL PRIMARY KEY,
+                titulo TEXT NOT NULL,
+                descripcion TEXT NOT NULL,
+                fecha TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                autor VARCHAR(100)  -- Opcional: añadir campo de autor
+            )
             """)
         conn.commit()
 
