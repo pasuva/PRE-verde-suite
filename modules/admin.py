@@ -9243,13 +9243,13 @@ def generar_informe(fecha_inicio, fecha_fin):
         SELECT COUNT(*) 
         FROM trazabilidad
         WHERE LOWER(accion) LIKE '%asignación%' 
-          AND DATE(fecha) BETWEEN %s AND %s  # ← CAMBIAR
+          AND DATE(fecha) BETWEEN %s AND %s
     """
     query_desasignaciones = """
         SELECT COUNT(*) 
         FROM trazabilidad
         WHERE LOWER(accion) LIKE '%desasignación%' 
-          AND DATE(fecha) BETWEEN %s AND %s  # ← CAMBIAR
+          AND DATE(fecha) BETWEEN %s AND %s
     """
     total_asignaciones_trazabilidad = ejecutar_consulta(query_asignaciones_trazabilidad, (fecha_inicio, fecha_fin))
     total_desasignaciones = ejecutar_consulta(query_desasignaciones, (fecha_inicio, fecha_fin))
@@ -9345,7 +9345,7 @@ def generar_informe(fecha_inicio, fecha_fin):
             END AS Serviciable,
             COUNT(*) AS Total
         FROM viabilidades
-        WHERE DATE(fecha_viabilidad) BETWEEN %s AND %s  # ← CAMBIAR
+        WHERE DATE(fecha_viabilidad) BETWEEN %s AND %s
         GROUP BY Serviciable
     """
     df_serviciable = pd.read_sql_query(query_serviciable, conn, params=(fecha_inicio, fecha_fin))
@@ -9357,7 +9357,7 @@ def generar_informe(fecha_inicio, fecha_fin):
             COALESCE(estado, 'Sin estado') AS Estado,
             COUNT(*) AS Total
         FROM viabilidades
-        WHERE DATE(fecha_viabilidad) BETWEEN %s AND %s  # ← CAMBIAR
+        WHERE DATE(fecha_viabilidad) BETWEEN %s AND %s
         GROUP BY Estado
         ORDER BY Total DESC
     """
@@ -9369,7 +9369,7 @@ def generar_informe(fecha_inicio, fecha_fin):
             COALESCE(resultado, 'Sin resultado') AS Resultado,
             COUNT(*) AS Total
         FROM viabilidades
-        WHERE DATE(fecha_viabilidad) BETWEEN %s AND %s  # ← CAMBIAR
+        WHERE DATE(fecha_viabilidad) BETWEEN %s AND %s
         GROUP BY Resultado
         ORDER BY Total DESC
     """
@@ -9379,7 +9379,7 @@ def generar_informe(fecha_inicio, fecha_fin):
     query_comentarios = """
         SELECT COUNT(*) FROM viabilidades 
         WHERE comentarios_gestor IS NOT NULL AND TRIM(comentarios_gestor) <> ''
-          AND DATE(fecha_viabilidad) BETWEEN %s AND %s  # ← CAMBIAR
+          AND DATE(fecha_viabilidad) BETWEEN %s AND %s
     """
     total_comentarios = ejecutar_consulta(query_comentarios, (fecha_inicio, fecha_fin))
     porcentaje_comentarios = (total_comentarios / total_viabilidades * 100) if total_viabilidades > 0 else 0
@@ -9480,7 +9480,7 @@ def generar_informe(fecha_inicio, fecha_fin):
     query_total_precontratos = """
            SELECT COUNT(*) 
             FROM precontratos 
-            WHERE DATE(fecha) BETWEEN %s AND %s  # ← CAMBIAR
+            WHERE DATE(fecha) BETWEEN %s AND %s
        """
     total_precontratos = ejecutar_consulta(query_total_precontratos, (fecha_inicio, fecha_fin))
 
@@ -9488,7 +9488,7 @@ def generar_informe(fecha_inicio, fecha_fin):
     query_precontratos_comercial = """
            SELECT comercial, COUNT(*) as total
             FROM precontratos
-            WHERE DATE(fecha) BETWEEN %s AND %s  # ← CAMBIAR
+            WHERE DATE(fecha) BETWEEN %s AND %s
             GROUP BY comercial
             ORDER BY total DESC
        """
@@ -9498,7 +9498,7 @@ def generar_informe(fecha_inicio, fecha_fin):
     query_precontratos_tarifa = """
            SELECT tarifas, COUNT(*) as total
             FROM precontratos
-            WHERE DATE(fecha) BETWEEN %s AND %s  # ← CAMBIAR
+            WHERE DATE(fecha) BETWEEN %s AND %s
             GROUP BY tarifas
             ORDER BY total DESC
        """
@@ -9510,7 +9510,7 @@ def generar_informe(fecha_inicio, fecha_fin):
             FROM precontratos 
             WHERE firma IS NOT NULL 
               AND TRIM(firma) <> ''
-              AND DATE(fecha) BETWEEN %s AND %s  # ← CAMBIAR
+              AND DATE(fecha) BETWEEN %s AND %s
        """
     total_precontratos_completados = ejecutar_consulta(query_precontratos_completados, (fecha_inicio, fecha_fin))
     porcentaje_completados = (
@@ -9591,7 +9591,7 @@ def generar_informe(fecha_inicio, fecha_fin):
     query_total_contratos = """
            SELECT COUNT(*) 
     FROM seguimiento_contratos 
-    WHERE DATE(fecha_ingreso) BETWEEN %s AND %s  # ← CAMBIAR
+    WHERE DATE(fecha_ingreso) BETWEEN %s AND %s
        """
     total_contratos = ejecutar_consulta(query_total_contratos, (fecha_inicio, fecha_fin))
 
@@ -9599,7 +9599,7 @@ def generar_informe(fecha_inicio, fecha_fin):
     query_contratos_estado = """
         SELECT estado, COUNT(*) as total
         FROM seguimiento_contratos
-        WHERE DATE(fecha_ingreso) BETWEEN %s AND %s  # ← CAMBIAR
+        WHERE DATE(fecha_ingreso) BETWEEN %s AND %s
         GROUP BY estado
         ORDER BY total DESC
     """
@@ -9609,7 +9609,7 @@ def generar_informe(fecha_inicio, fecha_fin):
     query_contratos_comercial = """
         SELECT comercial, COUNT(*) as total
         FROM seguimiento_contratos
-        WHERE DATE(fecha_ingreso) BETWEEN %s AND %s  # ← CAMBIAR
+        WHERE DATE(fecha_ingreso) BETWEEN %s AND %s
         GROUP BY comercial
         ORDER BY total DESC
     """
@@ -9620,7 +9620,7 @@ def generar_informe(fecha_inicio, fecha_fin):
         SELECT COUNT(*) 
         FROM seguimiento_contratos 
         WHERE estado IN ('Activo', 'En proceso', 'Pendiente')
-          AND DATE(fecha_ingreso) BETWEEN %s AND %s  # ← CAMBIAR
+          AND DATE(fecha_ingreso) BETWEEN %s AND %s
     """
     total_contratos_activos = ejecutar_consulta(query_contratos_activos, (fecha_inicio, fecha_fin))
     porcentaje_activos = (total_contratos_activos / total_contratos * 100) if total_contratos > 0 else 0
@@ -9631,7 +9631,7 @@ def generar_informe(fecha_inicio, fecha_fin):
         FROM seguimiento_contratos 
         WHERE fecha_instalacion IS NOT NULL 
           AND TRIM(fecha_instalacion) <> ''
-          AND DATE(fecha_ingreso) BETWEEN %s AND %s  # ← CAMBIAR
+          AND DATE(fecha_ingreso) BETWEEN %s AND %s
     """
     total_contratos_instalados = ejecutar_consulta(query_contratos_instalados, (fecha_inicio, fecha_fin))
     porcentaje_instalados = (total_contratos_instalados / total_contratos * 100) if total_contratos > 0 else 0
