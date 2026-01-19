@@ -9349,6 +9349,33 @@ def generar_informe(fecha_inicio, fecha_fin):
         GROUP BY Serviciable
     """
     df_serviciable = pd.read_sql_query(query_serviciable, conn, params=(fecha_inicio, fecha_fin))
+    if not df_serviciable.empty:
+        st.write("### 🔍 Debug: Columnas en df_serviciable")
+        st.write(f"Columnas: {df_serviciable.columns.tolist()}")
+        st.write(f"Shape: {df_serviciable.shape}")
+        st.write("Primeras filas:")
+        st.dataframe(df_serviciable)
+
+        # Verificar si 'Total' existe
+        if "Total" not in df_serviciable.columns:
+            st.error("❌ La columna 'Total' no existe en df_serviciable")
+            st.write("Columnas disponibles:", df_serviciable.columns.tolist())
+
+            # Buscar variaciones
+            posibles_nombres = ['Total', 'total', 'TOTAL', 'count', 'COUNT']
+            for nombre in posibles_nombres:
+                if nombre in df_serviciable.columns:
+                    st.warning(f"✅ Columna encontrada como: '{nombre}'")
+                    total_viabilidades = df_serviciable[nombre].sum()
+                    break
+            else:
+                st.error("❌ No se encontró ninguna columna de total")
+                total_viabilidades = 0
+        else:
+            total_viabilidades = df_serviciable["Total"].sum()
+    else:
+        st.warning("⚠️ df_serviciable está vacío")
+        total_viabilidades = 0
     total_viabilidades = df_serviciable["Total"].sum() if not df_serviciable.empty else 0
 
     # 2️⃣ Estado (fase administrativa)
