@@ -398,7 +398,7 @@ def cargar_usuarios():
     try:
         with conn:  # `with` cierra automáticamente
             return conn.execute("SELECT id, username, role, email FROM usuarios").fetchall()
-    except sqlite3.Error as e:
+    except psycopg2.Error as e:
         print(f"Error al cargar los usuarios: {e}")
         return []
 
@@ -2659,8 +2659,6 @@ def mostrar_formulario(click_data):
             # 1. VALIDACIÓN DE CAMPOS OBLIGATORIOS
             # ============================================
             campos_obligatorios = [
-                # ("cto_admin", "CTO Admin"),
-                # ("id_cto", "ID CTO"),
                 ("serviciable", "Serviciable"),
                 ("resultado", "Resultado"),
                 ("justificacion", "Justificación")
