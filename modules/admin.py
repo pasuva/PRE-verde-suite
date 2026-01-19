@@ -1,6 +1,4 @@
-import os
-import psycopg2
-
+from modules.comercial_rafa import enviar_notificaciones_viabilidad
 from modules.notificaciones import correo_usuario, correo_nuevas_zonas_comercial, correo_excel_control, \
     correo_envio_presupuesto_manual, correo_nueva_version, correo_asignacion_puntos_existentes, \
     correo_viabilidad_comercial, notificar_asignacion_ticket, notificar_actualizacion_ticket, correo_respuesta_comercial,\
@@ -26,6 +24,12 @@ from branca.element import Template, MacroElement
 from typing import Tuple, Dict, List
 from modules.reportes_pdf import preparar_datos_para_pdf, generar_pdf_reportlab
 from modules.cdr_kpis import mostrar_cdrs
+
+#paquetes para posgres#
+import psycopg2
+from psycopg2 import pool
+import os
+#######################
 
 warnings.filterwarnings("ignore", category=UserWarning)
 
@@ -2434,7 +2438,7 @@ def mostrar_formulario(click_data):
 
             if usuario != form_data["usuario"]:
                 update_form_data("usuario", usuario)
-######################
+        ######################
         col_nueva1, col_nueva2 = st.columns(2)
         with col_nueva1:
             fecha_entrega = st.text_input(
@@ -6533,7 +6537,7 @@ def admin_dashboard():
             🔹 **Creación:**  
             Al pulsar **“Crear Viabilidades”**, haz clic en el mapa para agregar un marcador que represente el punto de viabilidad.  
             También puedes actualizar las tablas internas y el Excel externo desde **“Actualizar tablas”**.  
-            
+
             🔹 **Presupuestos:**  
             Al subir un presupuesto, no te olvides de elegir un remitente y darle a **"Enviar"**. Si no quieres que lo reciba nadie, usa el correo de prueba. 
 
@@ -8133,9 +8137,9 @@ def mostrar_kpis_seguimiento_contratos():
 
                                     # Calcular días entre primer y último contrato
                                     metrics_df['Días Activo'] = (
-                                                metrics_df['Último Contrato'] - metrics_df['Primer Contrato']).dt.days
+                                            metrics_df['Último Contrato'] - metrics_df['Primer Contrato']).dt.days
                                     metrics_df['Contratos/Día'] = (
-                                                metrics_df['Contratos'] / metrics_df['Días Activo']).round(2)
+                                            metrics_df['Contratos'] / metrics_df['Días Activo']).round(2)
 
                                     st.dataframe(metrics_df.head(8), height=400)
 
@@ -8681,7 +8685,7 @@ def mostrar_certificacion():
 
             # Calcular porcentaje
             df_ctos['porcentaje_visitado'] = (
-                        df_ctos['viviendas_visitadas'] / df_ctos['total_viviendas_cto'] * 100).round(2)
+                    df_ctos['viviendas_visitadas'] / df_ctos['total_viviendas_cto'] * 100).round(2)
 
             # Paso 3: Unir datos
             if 'cto' in df_ofertas.columns:
@@ -9129,11 +9133,11 @@ def generar_informe(fecha_inicio, fecha_fin):
 
     total_viabilidades = df_viabilidades['total'].sum()
     total_serviciables = df_viabilidades[df_viabilidades['serviciable'] == 'sí']['total'].sum() if 'sí' in \
-                                                                                                          df_viabilidades[
-                                                                                                              'serviciable'].values else 0
+                                                                                                   df_viabilidades[
+                                                                                                       'serviciable'].values else 0
     total_no_serviciables_v = df_viabilidades[df_viabilidades['serviciable'] == 'no']['total'].sum() if 'no' in \
-                                                                                                               df_viabilidades[
-                                                                                                                   'serviciable'].values else 0
+                                                                                                        df_viabilidades[
+                                                                                                            'serviciable'].values else 0
 
     porcentaje_viables = (total_serviciables / total_viabilidades * 100) if total_viabilidades > 0 else 0
     porcentaje_no_viables = (total_no_serviciables_v / total_viabilidades * 100) if total_viabilidades > 0 else 0
@@ -9168,7 +9172,7 @@ def generar_informe(fecha_inicio, fecha_fin):
     total_movimientos = total_asignaciones_trazabilidad + total_desasignaciones
 
     porcentaje_asignaciones = (
-                total_asignaciones_trazabilidad / total_movimientos * 100) if total_movimientos > 0 else 0
+            total_asignaciones_trazabilidad / total_movimientos * 100) if total_movimientos > 0 else 0
     porcentaje_desasignaciones = (total_desasignaciones / total_movimientos * 100) if total_movimientos > 0 else 0
 
     informe_trazabilidad = pd.DataFrame({
@@ -9426,7 +9430,7 @@ def generar_informe(fecha_inicio, fecha_fin):
        """
     total_precontratos_completados = ejecutar_consulta(query_precontratos_completados, (fecha_inicio, fecha_fin))
     porcentaje_completados = (
-                total_precontratos_completados / total_precontratos * 100) if total_precontratos > 0 else 0
+            total_precontratos_completados / total_precontratos * 100) if total_precontratos > 0 else 0
 
     conn.close()
 
@@ -9967,3 +9971,4 @@ def obtener_conexion():
 
 if __name__ == "__main__":
     admin_dashboard()
+
