@@ -5466,7 +5466,7 @@ def admin_dashboard():
                 # Retornar en formato P + 10 dígitos
                 return f"P{numeros_10}"
 
-            @st.cache_data(ttl=300)
+            #@st.cache_data(ttl=300)
             def cargar_datos():
                 """Carga todos los datos de la base de datos"""
                 try:
@@ -5505,22 +5505,15 @@ def admin_dashboard():
                         "tirc": df_tirc
                     }
 
-
                 except Exception as e:
-
-                    # En lugar de st.toast, relanzamos la excepción para manejarla fuera
-
-                    raise e
+                    st.toast(f"❌ Error al cargar datos: {str(e)[:200]}")
+                    return None
 
             # CARGAR DATOS
             with st.spinner("🔄 Cargando datos..."):
-                try:
-                    datos = cargar_datos()
-                except Exception as e:
-                    st.toast(f"❌ Error al cargar datos: {str(e)[:200]}")
-                    datos = None
-            if not datos:
-                st.stop()
+                datos = cargar_datos()
+                if not datos:
+                    st.stop()
 
             # CREAR TABLA MAESTRA SIMPLE
             st.toast("🔄 Creando tabla maestra...")
