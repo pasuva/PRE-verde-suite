@@ -385,6 +385,7 @@ def mostrar_cdrs():
     if st.button("Cargar y analizar CDR"):
         with st.spinner("Cargando datos desde Google Sheets..."):
             df_cdr, _ = cargar_y_procesar_cdr()  # Obtén el DataFrame
+            df_cdr.columns = [col.lower() for col in df_cdr.columns]
 
             # FILTRAR SOLO LAS LLAMADAS QUE TIENEN DURACIÓN O ESTADO (no son solo intentos)
             # Guardar el DataFrame original para referencia
