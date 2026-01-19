@@ -5466,7 +5466,7 @@ def admin_dashboard():
                 # Retornar en formato P + 10 dígitos
                 return f"P{numeros_10}"
 
-            #@st.cache_data(ttl=300)
+            @st.cache_data(ttl=300)
             def cargar_datos():
                 """Carga todos los datos de la base de datos"""
                 try:
@@ -6222,7 +6222,7 @@ def admin_dashboard():
             # --- 1️⃣ Leer datos de la base de datos ---
             try:
                 conn = obtener_conexion()
-                df_tirc = pd.read_sql('SELECT * FROM public."TIRC"', conn)
+                df_tirc = pd.read_sql('SELECT * FROM "TIRC"', conn)
                 df_viabilidades = pd.read_sql("SELECT * FROM viabilidades", conn)
                 conn.close()
             except Exception as e:
@@ -8559,7 +8559,7 @@ def mostrar_certificacion():
             # Primero, obtener las columnas disponibles de comercial_rafa
             cursor = conn.cursor()
 
-            # Método 1: Usar PRAGMA para SQLite
+            
             cursor.execute("""
                 SELECT column_name 
                 FROM information_schema.columns 
