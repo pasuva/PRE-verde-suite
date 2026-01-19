@@ -5492,7 +5492,7 @@ def admin_dashboard():
                         normalizar_apartment_id)
                     df_contratos["fuente"] = "Contrato"
 
-                    df_tirc = pd.read_sql("SELECT * FROM TIRC", conn)
+                    df_tirc = pd.read_sql('SELECT * FROM "TIRC"', conn)
                     df_tirc["apartment_id_normalizado"] = df_tirc["apartment_id"].apply(normalizar_apartment_id)
                     df_tirc["fuente"] = "TIRC"
 
