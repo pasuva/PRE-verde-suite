@@ -1422,7 +1422,7 @@ def viabilidades_seccion():
                     WHERE table_schema = 'public' 
                     AND table_type = 'BASE TABLE'
                 """, conn)
-                if 'viabilidades' not in tables['name'].values:
+                if 'viabilidades' not in tables['table_name'].values:
                     st.toast("❌ La tabla 'viabilidades' no se encuentra en la base de datos.")
                     conn.close()
                     return
