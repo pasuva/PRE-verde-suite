@@ -161,9 +161,14 @@ def cargar_y_procesar_cdr():
 
         return df, kpis
 
+
     except Exception as e:
+
         print(f"❌ Error en cargar_y_procesar_cdr: {e}")
-        return None, None
+
+        # Devuelve DataFrame vacío en lugar de None
+
+        return pd.DataFrame(), {}
 
 
 # ==================== FUNCIONES DE CÁLCULO DE KPIS ====================
