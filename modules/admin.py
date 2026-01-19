@@ -8621,10 +8621,7 @@ def mostrar_certificacion():
 
             st.toast(f"📊 Columnas en comercial_rafa: {len(columnas_comercial_rafa)} encontradas")
 
-            # Mostrar columnas para debug
-            with st.expander("🔍 Ver columnas disponibles", expanded=False):
-                st.write("Columnas en comercial_rafa:")
-                st.write(columnas_comercial_rafa)
+
 
             # Verificar columnas específicas
             columnas_a_incluir = []
@@ -8709,10 +8706,6 @@ def mostrar_certificacion():
                 WHERE (cr."Contrato" IS NULL OR LOWER(TRIM(COALESCE(cr."Contrato", ''))) != 'pendiente')
                 AND cr.serviciable IS NOT NULL
                 """
-
-            # Mostrar consulta para depuración
-            with st.expander("📝 Ver consulta SQL generada", expanded=False):
-                st.code(query_ofertas)
 
             df_ofertas = pd.read_sql(query_ofertas, conn)
 
