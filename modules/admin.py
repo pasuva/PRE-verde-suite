@@ -7337,7 +7337,7 @@ def mostrar_kpis_seguimiento_contratos():
             cursor = conn.cursor()
 
             # Verificar que la tabla existe
-            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='seguimiento_contratos'")
+            cursor.execute("SELECT tablename FROM pg_tables WHERE schemaname = 'public' AND tablename = 'seguimiento_contratos'")
             if not cursor.fetchone():
                 st.warning("⚠️ La tabla 'seguimiento_contratos' no existe en la base de datos")
                 conn.close()
@@ -8559,7 +8559,7 @@ def mostrar_certificacion():
             # Primero, obtener las columnas disponibles de comercial_rafa
             cursor = conn.cursor()
 
-            
+
             cursor.execute("""
                 SELECT column_name 
                 FROM information_schema.columns 
