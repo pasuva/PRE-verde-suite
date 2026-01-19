@@ -5466,24 +5466,25 @@ def admin_dashboard():
                 # Retornar en formato P + 10 dígitos
                 return f"P{numeros_10}"
 
-            @st.cache_data(ttl=300)
-            def cargar_datos():
-                """Carga todos los datos de la base de datos"""
+            # Versión segura sin elementos UI dentro
+            def cargar_datos_seguro():
+                """Carga todos los datos de la base de datos SIN elementos de UI"""
                 try:
                     conn = obtener_conexion()
 
-                    # Cargar datos
+                    # Cargar datos (SIN st.toast aquí)
                     df_uis = pd.read_sql("SELECT * FROM datos_uis", conn)
                     df_uis["apartment_id_normalizado"] = df_uis["apartment_id"].apply(normalizar_apartment_id)
                     df_uis["fuente"] = "UIS"
 
                     df_via = pd.read_sql("SELECT * FROM viabilidades", conn)
                     # Expandir múltiples IDs
-                    df_via_exp = df_via.assign(
-                        apartment_id=df_via['apartment_id'].str.split(',')
-                    ).explode('apartment_id')
-                    df_via_exp['apartment_id'] = df_via_exp['apartment_id'].str.strip()
-                    df_via = df_via_exp[df_via_exp['apartment_id'] != ''].copy()
+                    if 'apartment_id' in df_via.columns:
+                        df_via_exp = df_via.assign(
+                            apartment_id=df_via['apartment_id'].str.split(',')
+                        ).explode('apartment_id')
+                        df_via_exp['apartment_id'] = df_via_exp['apartment_id'].str.strip()
+                        df_via = df_via_exp[df_via_exp['apartment_id'] != ''].copy()
                     df_via["apartment_id_normalizado"] = df_via["apartment_id"].apply(normalizar_apartment_id)
                     df_via["fuente"] = "Viabilidad"
 
@@ -5492,7 +5493,18 @@ def admin_dashboard():
                         normalizar_apartment_id)
                     df_contratos["fuente"] = "Contrato"
 
-                    df_tirc = pd.read_sql('SELECT * FROM "TIRC"', conn)
+                    # Para PostgreSQL - probar diferentes nombres de tabla
+                    try:
+                        # Intentar con mayúsculas y comillas
+                        df_tirc = pd.read_sql('SELECT * FROM "TIRC"', conn)
+                    except:
+                        try:
+                            # Intentar con minúsculas
+                            df_tirc = pd.read_sql('SELECT * FROM tirc', conn)
+                        except:
+                            # Intentar con esquema completo
+                            df_tirc = pd.read_sql('SELECT * FROM public."TIRC"', conn)
+
                     df_tirc["apartment_id_normalizado"] = df_tirc["apartment_id"].apply(normalizar_apartment_id)
                     df_tirc["fuente"] = "TIRC"
 
@@ -5506,16 +5518,20 @@ def admin_dashboard():
                     }
 
                 except Exception as e:
-                    st.toast(f"❌ Error al cargar datos: {str(e)[:200]}")
+                    # NO usar st.toast aquí - solo registrar error
+                    print(f"Error al cargar datos: {str(e)[:200]}")
                     return None
 
-            # CARGAR DATOS
+            # CARGAR DATOS con manejo de errores
             with st.spinner("🔄 Cargando datos..."):
-                datos = cargar_datos()
+                datos = cargar_datos_seguro()
                 if not datos:
+                    st.error("❌ Error al cargar los datos. Verifica la conexión a la base de datos.")
                     st.stop()
+                else:
+                    st.toast("✅ Datos cargados correctamente")
 
-            # CREAR TABLA MAESTRA SIMPLE
+            # Crear tabla maestra simple
             st.toast("🔄 Creando tabla maestra...")
 
             # Recolectar todos los IDs únicos
@@ -6994,7 +7010,7 @@ def admin_dashboard():
 
                             cursor = conn.cursor()
                             cursor.execute("DELETE FROM datos_uis")
-                            cursor.execute("DELETE FROM sqlite_sequence WHERE name='datos_uis'")
+                            cursor.execute("ALTER SEQUENCE datos_uis_id_seq RESTART WITH 1")
                             conn.commit()
 
                             total_registros = len(data_filtrada)
