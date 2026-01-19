@@ -625,7 +625,7 @@ def cargar_datos_por_provincia(provincia: str) -> Tuple[pd.DataFrame, pd.DataFra
         """
 
         query_comercial = f"""
-            SELECT apartment_id, comercial, serviciable, incidencia, contrato
+            SELECT apartment_id, comercial, serviciable, incidencia, Contrato
             FROM comercial_rafa c
             WHERE EXISTS (
                 SELECT 1 FROM datos_uis d 
