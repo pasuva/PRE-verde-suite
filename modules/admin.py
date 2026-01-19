@@ -6222,7 +6222,7 @@ def admin_dashboard():
             # --- 1️⃣ Leer datos de la base de datos ---
             try:
                 conn = obtener_conexion()
-                df_tirc = pd.read_sql('SELECT * FROM "TIRC"', conn)
+                df_tirc = pd.read_sql('SELECT * FROM public."TIRC"', conn)
                 df_viabilidades = pd.read_sql("SELECT * FROM viabilidades", conn)
                 conn.close()
             except Exception as e:
