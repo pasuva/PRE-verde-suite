@@ -9686,9 +9686,7 @@ def generar_informe(fecha_inicio, fecha_fin):
 def mostrar_control_versiones():
     try:
         # Conexión a la base de datos
-        conn = sqlitecloud.connect(
-            "sqlitecloud://ceafu04onz.g6.sqlite.cloud:8860/usuarios.db%sapikey=Qo9m18B9ONpfEGYngUKm99QB5bgzUTGtK7iAcThmwvY"
-        )
+        conn = obtener_conexion()
         cursor = conn.cursor()
 
         st.subheader("Control de versiones")
