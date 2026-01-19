@@ -8706,7 +8706,7 @@ def mostrar_certificacion():
                     du.numero AS numero_du
                 FROM comercial_rafa cr
                 LEFT JOIN datos_uis du ON cr.apartment_id = du.apartment_id
-                WHERE (cr.contrato IS NULL OR LOWER(TRIM(COALESCE(cr.contrato, ''))) != 'pendiente')
+                WHERE (cr."Contrato" IS NULL OR LOWER(TRIM(COALESCE(cr."Contrato", ''))) != 'pendiente')
                 AND cr.serviciable IS NOT NULL
                 """
 
