@@ -1885,7 +1885,7 @@ def viabilidades_seccion():
                     SELECT fecha_envio, destinatario, proyecto, archivo_nombre
                     FROM envios_presupuesto_viabilidad
                     WHERE ticket = %s
-                    ORDER BY datetime(fecha_envio) DESC
+                    ORDER BY fecha_envio DESC
                 """, conn, params=(st.session_state["selected_ticket"],))
                 conn.close()
 
