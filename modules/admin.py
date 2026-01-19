@@ -9372,11 +9372,11 @@ def generar_informe(fecha_inicio, fecha_fin):
                 st.error("❌ No se encontró ninguna columna de total")
                 total_viabilidades = 0
         else:
-            total_viabilidades = df_serviciable["Total"].sum()
+            total_viabilidades = df_serviciable["total"].sum()
     else:
         st.warning("⚠️ df_serviciable está vacío")
         total_viabilidades = 0
-    total_viabilidades = df_serviciable["Total"].sum() if not df_serviciable.empty else 0
+    total_viabilidades = df_serviciable["total"].sum() if not df_serviciable.empty else 0
 
     # 2️⃣ Estado (fase administrativa)
     query_estado = """
