@@ -1,20 +1,8 @@
 # cdr_kpis.py
-from datetime import datetime
-
-import pandas as pd
 import gspread
-import os
 import json
-import streamlit as st
 from google.oauth2.service_account import Credentials
-# Añadir al principio del archivo, después de los imports existentes:
-from reportlab.lib.pagesizes import letter
-from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.lib.enums import TA_CENTER, TA_LEFT
-from reportlab.lib import colors
-from reportlab.lib.units import inch
-import tempfile
+
 
 # ==================== CONFIGURACIÓN DEPARTAMENTAL ====================
 # Diccionario de mapeo: Extensión -> Departamento
