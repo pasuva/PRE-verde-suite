@@ -9048,11 +9048,34 @@ def generar_informe(fecha_inicio, fecha_fin):
     def ejecutar_consulta(query, params=None):
         # Abrir la conexión para cada consulta
         conn = obtener_conexion()
+        if conn is None:
+            print("❌ No se pudo conectar a la base de datos")
+            return 0
+
         cursor = conn.cursor()
-        cursor.execute(query, params if params else ())
-        result = cursor.fetchone()
-        conn.close()  # Cerrar la conexión inmediatamente después de ejecutar la consulta
-        return result[0] if result else 0
+        try:
+            if params:
+                cursor.execute(query, params)
+            else:
+                cursor.execute(query)
+
+            result = cursor.fetchone()
+            conn.close()
+
+            # ✅ MANEJO SEGURO: Verificar que result no sea None y tenga elementos
+            if result is None:
+                return 0
+            elif isinstance(result, tuple) and len(result) > 0:
+                return result[0] if result[0] is not None else 0
+            else:
+                return 0
+
+        except Exception as e:
+            print(f"❌ Error en consulta: {e}")
+            print(f"Consulta: {query}")
+            print(f"Parámetros: {params}")
+            conn.close()
+            return 0
 
     # 🔹 1️⃣ Total de asignaciones en el periodo T
     query_total = """
@@ -9061,6 +9084,8 @@ def generar_informe(fecha_inicio, fecha_fin):
         WHERE STRFTIME('%Y-%m-%d', fecha) BETWEEN %s AND %s
     """
     total_asignaciones = ejecutar_consulta(query_total, (fecha_inicio, fecha_fin))
+
+    print(f"✅ Total asignaciones: {total_asignaciones}")
 
     # 🔹 2️⃣ Cantidad de visitas (apartment_id presente en ambas tablas, sin filtrar por fecha)
     query_visitados = """
