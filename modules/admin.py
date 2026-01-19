@@ -625,7 +625,7 @@ def cargar_datos_por_provincia(provincia: str) -> Tuple[pd.DataFrame, pd.DataFra
         """
 
         query_comercial = f"""
-            SELECT apartment_id, comercial, serviciable, incidencia, Contrato
+            SELECT apartment_id, comercial, serviciable, incidencia, "Contrato"
             FROM comercial_rafa c
             WHERE EXISTS (
                 SELECT 1 FROM datos_uis d 
@@ -664,7 +664,7 @@ def cargar_datos_limitados() -> Tuple[pd.DataFrame, pd.DataFrame]:
         """
 
         query_comercial = """
-            SELECT apartment_id, comercial, serviciable, incidencia, contrato
+            SELECT apartment_id, comercial, serviciable, incidencia, "Contrato"
             FROM comercial_rafa
             LIMIT 1000
         """
@@ -695,7 +695,7 @@ def buscar_por_id(apartment_id: str) -> Tuple[pd.DataFrame, pd.DataFrame]:
         """
 
         query_comercial = f"""
-            SELECT apartment_id, comercial, serviciable, incidencia, contrato
+            SELECT apartment_id, comercial, serviciable, incidencia, "Contrato"
             FROM comercial_rafa
             WHERE apartment_id = %s
         """
