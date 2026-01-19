@@ -35,6 +35,7 @@ warnings.filterwarnings("ignore", category=UserWarning)
 
 cookie_name = "my_app"
 
+
 # Función para obtener conexión a la base de datos
 def obtener_conexion():
     """Retorna una nueva conexión a la base de datos PostgreSQL."""
@@ -53,6 +54,7 @@ def obtener_conexion():
         print(f"Error al conectar con PostgreSQL: {e}")
         return None
 
+
 def log_trazabilidad(usuario, accion, detalles):
     """Inserta un registro en la tabla de trazabilidad."""
     try:
@@ -69,12 +71,14 @@ def log_trazabilidad(usuario, accion, detalles):
         # En caso de error en la trazabilidad, se imprime en consola (no se interrumpe la app)
         print(f"Error registrando trazabilidad: {e}")
 
+
 # Función para convertir a numérico y manejar excepciones
 def safe_convert_to_numeric(col):
     try:
         return pd.to_numeric(col)
     except ValueError:
         return col  # Si ocurre un error, regresamos la columna original sin cambios
+
 
 def actualizar_google_sheet_desde_db(sheet_id, sheet_name="Viabilidades"):
     try:
@@ -384,6 +388,7 @@ def cargar_contratos_google():
         print(f"❌ Error cargando contratos desde Google Sheets: {e}")
         return pd.DataFrame()
 
+
 def cargar_usuarios():
     """Carga los usuarios desde la base de datos."""
     conn = obtener_conexion()
@@ -397,6 +402,7 @@ def cargar_usuarios():
         print(f"Error al cargar los usuarios: {e}")
         return []
 
+
 # Función para agregar un nuevo usuario
 def agregar_usuario(username, rol, password, email):
     conn = obtener_conexion()
@@ -404,7 +410,8 @@ def agregar_usuario(username, rol, password, email):
     hashed_pw = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
 
     try:
-        cursor.execute("INSERT INTO usuarios (username, password, role, email) VALUES (%s, %s, %s, %s)", (username, hashed_pw, rol, email))
+        cursor.execute("INSERT INTO usuarios (username, password, role, email) VALUES (%s, %s, %s, %s)",
+                       (username, hashed_pw, rol, email))
         conn.commit()
         st.toast(f"Usuario '{username}' creado con éxito.")
         log_trazabilidad(st.session_state["username"], "Agregar Usuario",
@@ -431,6 +438,7 @@ def agregar_usuario(username, rol, password, email):
         st.toast(f"El usuario '{username}' ya existe.")
     finally:
         conn.close()
+
 
 def editar_usuario(id, username, rol, password, email):
     conn = obtener_conexion()
@@ -492,6 +500,7 @@ def editar_usuario(id, username, rol, password, email):
         conn.close()
         st.toast(f"Usuario con ID {id} no encontrado.")
 
+
 # Función para eliminar un usuario
 def eliminar_usuario(id):
     conn = obtener_conexion()
@@ -520,6 +529,7 @@ def eliminar_usuario(id):
     else:
         st.toast("Usuario no encontrado.")
 
+
 def cargar_datos_uis():
     """Carga y cachea los datos de las tablas 'datos_uis', 'comercial_rafa'."""
     conn = obtener_conexion()
@@ -542,12 +552,14 @@ def cargar_datos_uis():
     comercial_rafa_df = pd.read_sql(query_rafa, conn)
 
     conn.close()
-    #return datos_uis, ofertas_df, comercial_rafa_df
+    # return datos_uis, ofertas_df, comercial_rafa_df
     return datos_uis, comercial_rafa_df
+
 
 def limpiar_mapa():
     """Evita errores de re-inicialización del mapa"""
     st.write("### Mapa actualizado")  # Esto forzará un refresh
+
 
 def cargar_provincias():
     conn = obtener_conexion()
@@ -576,6 +588,7 @@ def cargar_datos_por_provincia(provincia):
 
     conn.close()
     return datos_uis, comercial_rafa_df
+
 
 # ============================================
 # FUNCIONES DE CARGUE OPTIMIZADAS
@@ -806,7 +819,6 @@ def agregar_leyenda_al_mapa(mapa):
 
 
 def determinar_color_marcador(apartment_id: str, serv_uis: str, dicts: Dict) -> Tuple[str, str]:
-
     # Primero verificar si existe en datos comerciales
     if apartment_id in dicts.get('serviciable', {}):
         serv_comercial = dicts['serviciable'][apartment_id]
@@ -841,7 +853,6 @@ def determinar_color_marcador(apartment_id: str, serv_uis: str, dicts: Dict) -> 
 
 def mostrar_info_detallada(apartment_id: str, datos_filtrados: pd.DataFrame,
                            comercial_filtradas: pd.DataFrame, dicts: Dict):
-
     # Quitar el prefijo "🏠 " si existe
     apartment_id = apartment_id.replace("🏠 ", "")
 
@@ -1333,6 +1344,7 @@ def guardar_comentario(apartment_id, comentario, tabla):
         st.toast(f"Error al actualizar la base de datos: {str(e)}")
         return False
 
+
 def upload_file_to_cloudinary(file, public_id=None, folder=None):
     """
     Sube un archivo genérico (como Excel, PDF, ZIP...) a Cloudinary y devuelve la URL pública.
@@ -1343,13 +1355,14 @@ def upload_file_to_cloudinary(file, public_id=None, folder=None):
             file,
             resource_type="raw",  # ✅ Permite subir PDF, ZIP, etc.
             public_id=public_id,  # opcional, si quieres nombre personalizado
-            folder=folder,        # 👈 Carpeta en Cloudinary (p.ej. "PRESUPUESTOS")
+            folder=folder,  # 👈 Carpeta en Cloudinary (p.ej. "PRESUPUESTOS")
             overwrite=True
         )
         return upload_result.get("secure_url")
     except Exception as e:
         st.toast(f"❌ Error al subir el archivo a Cloudinary: {e}")
         return None
+
 
 def viabilidades_seccion():
     # 🟩 Submenú horizontal
@@ -1879,7 +1892,8 @@ def viabilidades_seccion():
                 if df_historial.empty:
                     st.info("No se han registrado envíos de presupuesto aún.")
                 else:
-                    df_historial["fecha_envio"] = pd.to_datetime(df_historial["fecha_envio"]).dt.strftime("%d/%m/%Y %H:%M")
+                    df_historial["fecha_envio"] = pd.to_datetime(df_historial["fecha_envio"]).dt.strftime(
+                        "%d/%m/%Y %H:%M")
                     st.dataframe(df_historial, width='stretch')
 
             except Exception as e:
@@ -2113,6 +2127,7 @@ def viabilidades_seccion():
                     st.session_state.map_center = (43.463444, -3.790476)  # Vuelve a la ubicación inicial
                     st.rerun()
 
+
 # Función para obtener conexión a la base de datos (SQLite Cloud)
 def get_db_connection():
     try:
@@ -2129,6 +2144,7 @@ def get_db_connection():
     except psycopg2.Error as e:
         print(f"Error al conectar con PostgreSQL: {e}")
         return None
+
 
 def generar_ticket():
     """Genera un ticket único con formato: añomesdia(numero_consecutivo)"""
@@ -2149,6 +2165,7 @@ def generar_ticket():
     ticket = f"{fecha_actual}{max_consecutivo + 1:03d}"
     conn.close()
     return ticket
+
 
 def guardar_viabilidad(datos):
     """
@@ -2252,6 +2269,7 @@ def guardar_viabilidad(datos):
 
     # Mostrar mensaje de éxito en Streamlit
     st.toast("✅ Los cambios para la viabilidad han sido guardados correctamente")
+
 
 # Función para obtener viabilidades guardadas en la base de datos
 def obtener_viabilidades():
@@ -2641,8 +2659,8 @@ def mostrar_formulario(click_data):
             # 1. VALIDACIÓN DE CAMPOS OBLIGATORIOS
             # ============================================
             campos_obligatorios = [
-                #("cto_admin", "CTO Admin"),
-                #("id_cto", "ID CTO"),
+                # ("cto_admin", "CTO Admin"),
+                # ("id_cto", "ID CTO"),
                 ("serviciable", "Serviciable"),
                 ("resultado", "Resultado"),
                 ("justificacion", "Justificación")
@@ -2738,7 +2756,7 @@ def mostrar_formulario(click_data):
                     if correo_comercial:
                         # Importar la función de notificaciones
                         try:
-                            #from modules.notificaciones import correo_respuesta_comercial
+                            # from modules.notificaciones import correo_respuesta_comercial
 
                             # Preparar el comentario para la notificación
                             comentario_notificacion = (
@@ -2792,6 +2810,7 @@ def mostrar_formulario(click_data):
         except Exception as e:
             st.toast(f"❌ Error al guardar los cambios: {str(e)}")
             st.toast(f"❌ Error detallado: {str(e)}")
+
 
 def obtener_apartment_ids_existentes(cursor):
     cursor.execute("SELECT apartment_id FROM datos_uis")
@@ -4571,7 +4590,6 @@ def mostrar_todos_tickets():
             cerrados = len(df_filtrado[df_filtrado['estado'] == 'Cerrado'])
             st.metric("Cerrados", cerrados)
 
-
         # --- PESTAÑAS PARA DIFERENTES VISTAS ---
         tab1, tab2 = st.tabs(["📋 Vista Tabla", "📄 Vista Detallada"])
 
@@ -4893,6 +4911,7 @@ def mostrar_todos_tickets():
         1. Verifica que la tabla 'tickets' existe en la base de datos
         2. Asegúrate de que la función 'obtener_conexion()' funciona correctamente
         """)
+
 
 def mostrar_mis_tickets():
     """Muestra los tickets del usuario actual."""
@@ -5270,6 +5289,7 @@ def crear_ticket_ejemplo():
     except Exception as e:
         st.toast(f"⚠️ Error al crear ticket de ejemplo: {str(e)[:100]}")
 
+
 # Función principal de la app (Dashboard de administración)
 def admin_dashboard():
     """Panel del administrador."""
@@ -5377,7 +5397,8 @@ def admin_dashboard():
         )
 
         # Registrar la selección de la opción en trazabilidad
-        log_trazabilidad(st.session_state["username"], "Selección de opción", f"El admin seleccionó la opción '{opcion}'.")
+        log_trazabilidad(st.session_state["username"], "Selección de opción",
+                         f"El admin seleccionó la opción '{opcion}'.")
 
         # Botón de Cerrar sesión en la barra lateral
         with st.sidebar:
@@ -5411,7 +5432,7 @@ def admin_dashboard():
 
         sub_seccion = option_menu(
             menu_title=None,  # Sin título encima del menú
-            options=["Visualizar Datos UIS", "Seguimiento de Contratos", "Precontratos","TIRC"],
+            options=["Visualizar Datos UIS", "Seguimiento de Contratos", "Precontratos", "TIRC"],
             icons=["table", "file-earmark-spreadsheet", "file-text", "puzzle"],  # Puedes cambiar iconos
             default_index=0,
             orientation="horizontal",  # horizontal para que quede tipo pestañas arriba
@@ -5421,7 +5442,7 @@ def admin_dashboard():
                     "margin": "0px",
                     "background-color": "#F0F7F2",
                     "border-radius": "0px",
-                    "max-width":"none"
+                    "max-width": "none"
                 },
                 "icon": {
                     "color": "#2C5A2E",  # Íconos en verde oscuro
@@ -6488,7 +6509,7 @@ def admin_dashboard():
                 "container": {
                     "padding": "0px",
                     "margin": "0px",
-                    "max-width":"none",
+                    "max-width": "none",
                     "background-color": "#F0F7F2",
                     "border-radius": "0px"
                 },
@@ -6645,7 +6666,9 @@ def admin_dashboard():
         elif sub_seccion == "Agregar usuarios":
             st.info("ℹ️ Desde esta sección puedes agregar nuevos usuarios al sistema.")
             nombre = st.text_input("Nombre del Usuario")
-            rol = st.selectbox("Rol", ["admin", "comercial", "comercial_jefe", "comercial_rafa", "comercial_vip","demo","tecnico"])
+            rol = st.selectbox("Rol",
+                               ["admin", "comercial", "comercial_jefe", "comercial_rafa", "comercial_vip", "demo",
+                                "tecnico"])
             email = st.text_input("Email del Usuario")
             password = st.text_input("Contraseña", type="password")
 
@@ -6671,9 +6694,11 @@ def admin_dashboard():
                 if usuario:
                     nuevo_nombre = st.text_input("Nuevo Nombre", value=usuario[0])
                     nuevo_rol = st.selectbox("Nuevo Rol",
-                                             ["admin", "comercial", "comercial_jefe", "comercial_rafa","comercial_vip","demo","tecnico"],
+                                             ["admin", "comercial", "comercial_jefe", "comercial_rafa", "comercial_vip",
+                                              "demo", "tecnico"],
                                              index=["admin", "comercial", "comercial_jefe",
-                                                    "comercial_rafa","comercial_vip","demo","tecnico"].index(usuario[1]))
+                                                    "comercial_rafa", "comercial_vip", "demo", "tecnico"].index(
+                                                 usuario[1]))
                     nuevo_email = st.text_input("Nuevo Email", value=usuario[2])
                     nueva_contraseña = st.text_input("Nueva Contraseña", type="password")
 
@@ -7316,7 +7341,8 @@ def admin_dashboard():
                     st.markdown(f"🗒️ {row['descripcion']}")
 
     elif opcion == "Control de versiones":
-        log_trazabilidad(st.session_state["username"], "Control de versiones", "El admin accedió a la sección de control de versiones.")
+        log_trazabilidad(st.session_state["username"], "Control de versiones",
+                         "El admin accedió a la sección de control de versiones.")
         mostrar_control_versiones()
 
 
@@ -7340,6 +7366,8 @@ def mostrar_leyenda_en_streamlit():
             - 🟣 **Morado:** Incidencia
             - 🔵 **Azul:** No Visitado
             """)
+
+
 ######kpis contratos####
 
 def mostrar_kpis_seguimiento_contratos():
@@ -7357,7 +7385,8 @@ def mostrar_kpis_seguimiento_contratos():
             cursor = conn.cursor()
 
             # Verificar que la tabla existe
-            cursor.execute("SELECT tablename FROM pg_tables WHERE schemaname = 'public' AND tablename = 'seguimiento_contratos'")
+            cursor.execute(
+                "SELECT tablename FROM pg_tables WHERE schemaname = 'public' AND tablename = 'seguimiento_contratos'")
             if not cursor.fetchone():
                 st.warning("⚠️ La tabla 'seguimiento_contratos' no existe en la base de datos")
                 conn.close()
@@ -8562,6 +8591,8 @@ def mostrar_kpis_seguimiento_contratos():
             import traceback
             with st.expander("🔍 Ver detalles del error", expanded=False):
                 st.code(traceback.format_exc())
+
+
 ########################
 
 def mostrar_certificacion():
@@ -8579,20 +8610,21 @@ def mostrar_certificacion():
             # Primero, obtener las columnas disponibles de comercial_rafa
             cursor = conn.cursor()
 
-
             cursor.execute("""
                 SELECT column_name 
                 FROM information_schema.columns 
-                WHERE table_name = 'comercial_rafa' 
+                WHERE table_schema = 'public' 
+                AND table_name = 'comercial_rafa' 
                 ORDER BY ordinal_position
             """)
             columnas_comercial_rafa = [row[0] for row in cursor.fetchall()]
 
-            # Método alternativo: Usar consulta SELECT con LIMIT 0
-            # cursor.execute("SELECT * FROM comercial_rafa LIMIT 0")
-            # columnas_comercial_rafa = [desc[0] for desc in cursor.description]
-
             st.toast(f"📊 Columnas en comercial_rafa: {len(columnas_comercial_rafa)} encontradas")
+
+            # Mostrar columnas para debug
+            with st.expander("🔍 Ver columnas disponibles", expanded=False):
+                st.write("Columnas en comercial_rafa:")
+                st.write(columnas_comercial_rafa)
 
             # Verificar columnas específicas
             columnas_a_incluir = []
@@ -8612,45 +8644,76 @@ def mostrar_certificacion():
                     st.toast(f"✅ Columna de fecha encontrada: {nombre_fecha}")
                     break
 
-            # Construir consulta dinámicamente
+            # Construir consulta dinámicamente CON SOPORTE PARA MAYÚSCULAS
             columnas_seleccionadas = []
+
+            # Función para formatear nombres de columna para PostgreSQL
+            def formatear_columna(tabla, nombre_col):
+                """Formatea nombres de columna con comillas si tienen mayúsculas"""
+                if nombre_col != nombre_col.lower():
+                    return f'{tabla}."{nombre_col}"'
+                else:
+                    return f'{tabla}.{nombre_col}'
 
             # Columnas de comercial_rafa
             for col in columnas_base:
-                if col in columnas_comercial_rafa:
-                    columnas_seleccionadas.append(f"cr.{col}")
+                # Buscar coincidencia case-insensitive
+                col_encontrada = None
+                for col_real in columnas_comercial_rafa:
+                    if col_real.lower() == col.lower():
+                        col_encontrada = col_real
+                        break
+
+                if col_encontrada:
+                    columnas_seleccionadas.append(formatear_columna('cr', col_encontrada))
                 else:
                     st.toast(f"⚠️ Columna '{col}' no encontrada en comercial_rafa")
 
             # Añadir columna de fecha si existe
             if nombre_fecha:
-                columnas_seleccionadas.append(f"cr.{nombre_fecha}")
+                columnas_seleccionadas.append(formatear_columna('cr', nombre_fecha))
 
             # Si no hay suficientes columnas, usar todas
             if len(columnas_seleccionadas) < 5:
                 st.warning("⚠️ Pocas columnas encontradas, usando SELECT *")
-                columnas_seleccionadas = ["cr.*"]
+                query_ofertas = """
+                SELECT cr.*,
+                       du.cto,
+                       du.olt,
+                       du.provincia AS provincia_du,
+                       du.municipio AS municipio_du,
+                       du.poblacion AS poblacion_du,
+                       du.vial AS vial_du,
+                       du.numero AS numero_du
+                FROM comercial_rafa cr
+                LEFT JOIN datos_uis du ON cr.apartment_id = du.apartment_id
+                WHERE (cr.contrato IS NULL OR LOWER(TRIM(COALESCE(cr.contrato, ''))) != 'pendiente')
+                AND cr.serviciable IS NOT NULL
+                """
+            else:
+                # Consulta dinámica
+                columnas_str = ", ".join(columnas_seleccionadas)
 
-            # Consulta dinámica
-            columnas_str = ", ".join(columnas_seleccionadas)
-
-            query_ofertas = f"""
-            SELECT 
-                {columnas_str},
-                du.cto,
-                du.olt,
-                du.provincia AS provincia_du,
-                du.municipio AS municipio_du,
-                du.poblacion AS poblacion_du,
-                du.vial AS vial_du,
-                du.numero AS numero_du
-            FROM comercial_rafa cr
-            LEFT JOIN datos_uis du ON cr.apartment_id = du.apartment_id
-            WHERE (cr.contrato IS NULL OR LOWER(TRIM(COALESCE(cr.contrato, ''))) != 'pendiente')
-            AND cr.serviciable IS NOT NULL
-            """
+                query_ofertas = f"""
+                SELECT 
+                    {columnas_str},
+                    du.cto,
+                    du.olt,
+                    du.provincia AS provincia_du,
+                    du.municipio AS municipio_du,
+                    du.poblacion AS poblacion_du,
+                    du.vial AS vial_du,
+                    du.numero AS numero_du
+                FROM comercial_rafa cr
+                LEFT JOIN datos_uis du ON cr.apartment_id = du.apartment_id
+                WHERE (cr.contrato IS NULL OR LOWER(TRIM(COALESCE(cr.contrato, ''))) != 'pendiente')
+                AND cr.serviciable IS NOT NULL
+                """
 
             # Mostrar consulta para depuración
+            with st.expander("📝 Ver consulta SQL generada", expanded=False):
+                st.code(query_ofertas)
+
             df_ofertas = pd.read_sql(query_ofertas, conn)
 
             if df_ofertas.empty:
@@ -8685,7 +8748,7 @@ def mostrar_certificacion():
 
             # Calcular porcentaje
             df_ctos['porcentaje_visitado'] = (
-                    df_ctos['viviendas_visitadas'] / df_ctos['total_viviendas_cto'] * 100).round(2)
+                    df_ctos['viviendas_visitadas'] / df_ctos['total_viviendas_cto'].replace(0, 1) * 100).round(2)
 
             # Paso 3: Unir datos
             if 'cto' in df_ofertas.columns:
@@ -8721,6 +8784,8 @@ def mostrar_certificacion():
                 df_final = df_final.rename(columns=rename_map)
 
             # Mostrar información sobre el DataFrame
+            st.success(f"✅ Datos cargados: {len(df_final)} registros encontrados")
+
             # Clasificar observaciones
             df_final = clasificar_observaciones(df_final)
 
@@ -8728,9 +8793,9 @@ def mostrar_certificacion():
             mostrar_resultados_certificacion(df_final)
 
         except Exception as e:
-            st.toast(f"❌ Error en el proceso de certificación: {str(e)}")
+            st.error(f"❌ Error en el proceso de certificación: {str(e)}")
             import traceback
-            with st.expander("🔍 Ver detalles del error", expanded=False):
+            with st.expander("🔍 Ver detalles del error", expanded=True):
                 st.code(traceback.format_exc())
             st.toast("Error al generar la certificación", icon="❌")
 
@@ -8983,6 +9048,7 @@ def mostrar_resultados_certificacion(df):
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 width='stretch'
             )
+
 
 def generar_informe(fecha_inicio, fecha_fin):
     # Conectar a la base de datos y realizar cada consulta
@@ -9615,6 +9681,7 @@ def generar_informe(fecha_inicio, fecha_fin):
 
     return informe
 
+
 # Función para leer y mostrar el control de versiones
 def mostrar_control_versiones():
     try:
@@ -9625,7 +9692,8 @@ def mostrar_control_versiones():
         cursor = conn.cursor()
 
         st.subheader("Control de versiones")
-        st.info("ℹ️ Aquí puedes ver el historial de cambios y versiones de la aplicación. Cada entrada incluye el número de versión y una breve descripción de lo que se ha actualizado o modificado.")
+        st.info(
+            "ℹ️ Aquí puedes ver el historial de cambios y versiones de la aplicación. Cada entrada incluye el número de versión y una breve descripción de lo que se ha actualizado o modificado.")
 
         # --- FORMULARIO PARA NUEVA VERSIÓN ---
         with st.form("form_nueva_version"):
@@ -9682,6 +9750,7 @@ def mostrar_control_versiones():
 
     except Exception as e:
         st.toast(f"Ha ocurrido un error al cargar el control de versiones: {e}")
+
 
 # Función para crear el gráfico interactivo de Serviciabilidad
 def create_serviciable_graph(cursor) -> go.Figure:
