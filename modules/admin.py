@@ -390,16 +390,21 @@ def cargar_contratos_google():
 
 
 def cargar_usuarios():
-    """Carga los usuarios desde la base de datos."""
+    """Carga los usuarios desde la base de datos PostgreSQL."""
     conn = obtener_conexion()
     if not conn:
-        return []  # Salida temprana si la conexión falla
+        return []
 
     try:
-        with conn:  # `with` cierra automáticamente
-            return conn.execute("SELECT id, username, role, email FROM usuarios").fetchall()
+        cursor = conn.cursor()  # Crear cursor explícitamente
+        cursor.execute("SELECT id, username, role, email FROM usuarios ORDER BY id")
+        usuarios = cursor.fetchall()
+        conn.close()  # Cerrar conexión explícitamente
+        return usuarios
     except psycopg2.Error as e:
-        print(f"Error al cargar los usuarios: {e}")
+        print(f"❌ Error al cargar los usuarios: {e}")
+        if conn:
+            conn.close()
         return []
 
 
