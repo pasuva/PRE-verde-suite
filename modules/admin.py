@@ -434,7 +434,7 @@ def agregar_usuario(username, rol, password, email):
         )
         correo_usuario(email, asunto, mensaje)  # Llamada a la función de correo
 
-    except sqlite3.IntegrityError:
+    except psycopg2.IntegrityError:
         st.toast(f"El usuario '{username}' ya existe.")
     finally:
         conn.close()
