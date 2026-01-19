@@ -1399,7 +1399,12 @@ def viabilidades_seccion():
         with st.spinner("⏳ Cargando los datos de viabilidades..."):
             try:
                 conn = obtener_conexion()
-                tables = pd.read_sql("SELECT name FROM sqlite_master WHERE type='table';", conn)
+                tables = pd.read_sql("""
+                    SELECT table_name 
+                    FROM information_schema.tables 
+                    WHERE table_schema = 'public' 
+                    AND table_type = 'BASE TABLE'
+                """, conn)
                 if 'viabilidades' not in tables['name'].values:
                     st.toast("❌ La tabla 'viabilidades' no se encuentra en la base de datos.")
                     conn.close()
@@ -3382,7 +3387,13 @@ def actualizar_estado_ticket(ticket_id, nuevo_estado):
         titulo_ticket = ticket_info[1] if ticket_info else f"#{ticket_id}"
 
         # Verificar si existe el campo fecha_cierre
-        cursor.execute("PRAGMA table_info(tickets)")
+        cursor.execute("""
+            SELECT column_name, data_type, is_nullable
+            FROM information_schema.columns 
+            WHERE table_schema = 'public' 
+            AND table_name = 'tickets' 
+            ORDER BY ordinal_position
+        """)
         columnas = cursor.fetchall()
         tiene_fecha_cierre = any(col[1] == 'fecha_cierre' for col in columnas)
 
@@ -6211,7 +6222,7 @@ def admin_dashboard():
             # --- 1️⃣ Leer datos de la base de datos ---
             try:
                 conn = obtener_conexion()
-                df_tirc = pd.read_sql("SELECT * FROM TIRC", conn)
+                df_tirc = pd.read_sql('SELECT * FROM "TIRC"', conn)
                 df_viabilidades = pd.read_sql("SELECT * FROM viabilidades", conn)
                 conn.close()
             except Exception as e:
