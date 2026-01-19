@@ -9372,21 +9372,21 @@ def generar_informe(fecha_inicio, fecha_fin):
                 st.error("❌ No se encontró ninguna columna de total")
                 total_viabilidades = 0
         else:
-            total_viabilidades = df_serviciable["total"].sum()
+            total_viabilidades = df_serviciable["Total"].sum()
     else:
         st.warning("⚠️ df_serviciable está vacío")
         total_viabilidades = 0
-    total_viabilidades = df_serviciable["total"].sum() if not df_serviciable.empty else 0
+    total_viabilidades = df_serviciable["Total"].sum() if not df_serviciable.empty else 0
 
     # 2️⃣ Estado (fase administrativa)
     query_estado = """
         SELECT 
             COALESCE(estado, 'Sin estado') AS Estado,
-            COUNT(*) AS Total
+            COUNT(*) AS "Total"
         FROM viabilidades
         WHERE DATE(fecha_viabilidad) BETWEEN %s AND %s
         GROUP BY Estado
-        ORDER BY Total DESC
+        ORDER BY "Total" DESC
     """
     df_estado = pd.read_sql_query(query_estado, conn, params=(fecha_inicio, fecha_fin))
 
@@ -9394,11 +9394,11 @@ def generar_informe(fecha_inicio, fecha_fin):
     query_resultado = """
         SELECT 
             COALESCE(resultado, 'Sin resultado') AS Resultado,
-            COUNT(*) AS Total
+            COUNT(*) AS "Total"
         FROM viabilidades
         WHERE DATE(fecha_viabilidad) BETWEEN %s AND %s
         GROUP BY Resultado
-        ORDER BY Total DESC
+        ORDER BY "Total" DESC
     """
     df_resultado = pd.read_sql_query(query_resultado, conn, params=(fecha_inicio, fecha_fin))
 
